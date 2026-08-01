@@ -105,12 +105,46 @@
     .hud-btn.play:hover { filter: brightness(1.1); }
 
     /* Bottom hotbar (Minecraft inventory bar feel) */
-    #hotbar {
+    #hotbar-wrap {
       position: fixed;
       bottom: 18px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      pointer-events: none;
+    }
+    #hotbar-wrap > * { pointer-events: auto; }
+    #hotbar-tabs {
+      display: flex;
+      gap: 3px;
+      padding: 3px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+    }
+    #hotbar-tabs .tab {
+      border: 1px solid transparent;
+      background: transparent;
+      color: #a89880;
+      font-family: var(--font-ui);
+      font-size: 0.72rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      line-height: 1.2;
+    }
+    #hotbar-tabs .tab:hover { color: var(--pale); border-color: rgba(255,255,255,0.12); }
+    #hotbar-tabs .tab.active {
+      background: rgba(201, 168, 76, 0.28);
+      border-color: rgba(201, 168, 76, 0.55);
+      color: #fff;
+    }
+    #hotbar {
       display: flex;
       gap: 4px;
       padding: 6px;
@@ -119,7 +153,7 @@
       border-radius: 8px;
       backdrop-filter: blur(8px);
     }
-    body.playing #hotbar,
+    body.playing #hotbar-wrap,
     body.playing #hud-top,
     body.playing #panel-left,
     body.playing #panel-right,
@@ -490,7 +524,10 @@
     <button class="hud-btn play" id="btn-play" title="Play">▶ 遊歷</button>
   </div>
 
-  <div id="hotbar" title="Drag onto terrain, or click then click terrain"></div>
+  <div id="hotbar-wrap" title="Drag onto terrain, or click then click terrain">
+    <div id="hotbar-tabs"></div>
+    <div id="hotbar"></div>
+  </div>
   <div id="hint">拖放到島上 · 開「多選」或清單勾選後「成組」</div>
 
   <aside class="drawer hidden" id="panel-left">
@@ -651,36 +688,57 @@ const GROUND_COLORS = {
 };
 const GROUND_LABELS = { road: '黃土路', mud: '泥徑', grass: '草徑', erase: '擦除' };
 
+const HOTBAR_TABS = [
+  { id: 'terrain', label: '地形' },
+  { id: 'decor',   label: '景物' },
+  { id: 'mob',     label: '靈獸' },
+];
+
 const PRESETS = [
-  { type: 'mountain', icon: '⛰',  label: '山',  terrain: true },
-  { type: 'hole',     icon: '🕳',  label: '穴',  terrain: true },
-  { type: 'water',    icon: '💧',  label: '澤',  terrain: false },
-  { type: 'tree',     icon: '🌲',  label: '樹',  terrain: false },
-  { type: 'bamboo',   icon: '🎋',  label: '竹',  terrain: false },
-  { type: 'rock',     icon: '🪨',  label: '石',  terrain: false },
-  { type: 'shrine',   icon: '🗿',  label: '祭',  terrain: false },
-  { type: 'totem',    icon: '🦴',  label: '圖騰', terrain: false },
-  { type: 'monolith', icon: '⬛',  label: '碑',  terrain: false },
-  { type: 'bridge',   icon: '🪵',  label: '渡',  terrain: false },
-  { type: 'firepit',  icon: '🔥',  label: '火',  terrain: false },
-  { type: 'nest',     icon: '🪺',  label: '巢',  terrain: false },
+  { type: 'mountain', icon: '⛰',  label: '山',  terrain: true,  tab: 'terrain' },
+  { type: 'hole',     icon: '🕳',  label: '穴',  terrain: true,  tab: 'terrain' },
+  { type: 'water',    icon: '💧',  label: '澤',  terrain: false, tab: 'terrain' },
+  { type: 'tree',     icon: '🌲',  label: '樹',  terrain: false, tab: 'decor' },
+  { type: 'bamboo',   icon: '🎋',  label: '竹',  terrain: false, tab: 'decor' },
+  { type: 'rock',     icon: '🪨',  label: '石',  terrain: false, tab: 'decor' },
+  { type: 'shrine',   icon: '🗿',  label: '祭',  terrain: false, tab: 'decor' },
+  { type: 'totem',    icon: '🦴',  label: '圖騰', terrain: false, tab: 'decor' },
+  { type: 'monolith', icon: '⬛',  label: '碑',  terrain: false, tab: 'decor' },
+  { type: 'bridge',   icon: '🪵',  label: '渡',  terrain: false, tab: 'decor' },
+  { type: 'firepit',  icon: '🔥',  label: '火',  terrain: false, tab: 'decor' },
+  { type: 'nest',     icon: '🪺',  label: '巢',  terrain: false, tab: 'decor' },
+  { type: 'orangutan', icon: '🦧', label: '猩猩', terrain: false, mob: true, tab: 'mob' },
+  { type: 'fox',       icon: '🦊', label: '狐',   terrain: false, mob: true, tab: 'mob' },
+  { type: 'goose',     icon: '🦢', label: '雁',   terrain: false, mob: true, fly: true, tab: 'mob' },
+  { type: 'swallow',   icon: '🕊️', label: '燕',   terrain: false, mob: true, fly: true, tab: 'mob' },
+  { type: 'pheasant',  icon: '🦚', label: '雉',   terrain: false, mob: true, fly: true, tab: 'mob' },
 ];
 
 const DEFAULT_PROPS = {
   // Mountains are landscape-scale; props are human/spirit-scale (much smaller)
   mountain: { height: 12, baseWidth: 22, baseLength: 20, rotation: 0, steepness: 0.35, shape: 'ridge', color: '#8a8670' },
   hole:     { depth: 3.2, baseWidth: 9, baseLength: 9, rotation: 0, steepness: 0.5, shape: 'round', fillWater: true, waterColor: '#5a7a72', waterLevel: 0.12 },
-  water:    { shape: 'organic', size: 2.2, waterLevel: 0.1, waterColor: '#5a7a72', digDepth: 0.55 },
-  tree:     { height: 1.55, rotation: 0, variant: 'pine' },
-  bamboo:   { height: 1.8, rotation: 0, variant: 'bamboo' },
-  rock:     { size: 0.55, rotation: 0, roughness: 0.7 },
-  shrine:   { scale: 0.42, rotation: 0, style: 'cairn' },
-  totem:    { scale: 0.5, rotation: 0, style: 'bone' },
-  monolith: { scale: 0.45, rotation: 0, style: 'slab' },
-  bridge:   { scale: 0.4, rotation: 0, style: 'log' },
-  firepit:  { scale: 0.4, rotation: 0 },
-  nest:     { scale: 0.55, rotation: 0 },
+  water:    { shape: 'organic', size: 2.2, waterLevel: 0.1, waterColor: '#5a7a72', digDepth: 0.55, color: '#6a5a48' },
+  tree:     { height: 1.55, rotation: 0, variant: 'pine', color: '#3a4538', trunkColor: '#4a3a2e', color2: '#c8b0b0' },
+  bamboo:   { height: 1.8, rotation: 0, variant: 'bamboo', color: '#4a5540', trunkColor: '#3a4030' },
+  rock:     { size: 0.55, rotation: 0, roughness: 0.7, color: '#5a554c', color2: '#4a4840' },
+  shrine:   { scale: 0.42, rotation: 0, style: 'cairn', color: '#5a5448', color2: '#6a6255' },
+  totem:    { scale: 0.5, rotation: 0, style: 'bone', color: '#d0c0a0', color2: '#e8dcc0' },
+  monolith: { scale: 0.45, rotation: 0, style: 'slab', color: '#5c564c', color2: '#4a453c' },
+  bridge:   { scale: 0.4, rotation: 0, style: 'log', color: '#5a4030', color2: '#3a5a30' },
+  firepit:  { scale: 0.4, rotation: 0, color: '#4a453c', color2: '#b85a30' },
+  nest:     { scale: 0.55, rotation: 0, color: '#6a5038', color2: '#d8c8a0' },
+  orangutan:{ scale: 0.72, rotation: 0, color: '#9a5a32', color2: '#3a2818', wanderRadius: 6 },
+  fox:      { scale: 0.55, rotation: 0, color: '#c46830', color2: '#f0e8e0', wanderRadius: 8 },
+  goose:    { scale: 0.55, rotation: 0, color: '#6a7068', color2: '#c8c0a8', wanderRadius: 14, flyHeight: 4.5 },
+  swallow:  { scale: 0.32, rotation: 0, color: '#2a3038', color2: '#e8e0d0', wanderRadius: 12, flyHeight: 5.5 },
+  pheasant: { scale: 0.48, rotation: 0, color: '#8a4a28', color2: '#2a6a48', wanderRadius: 10, flyHeight: 2.8 },
 };
+
+const MOB_TYPES = new Set(['orangutan', 'fox', 'goose', 'swallow', 'pheasant']);
+const FLYING_MOBS = new Set(['goose', 'swallow', 'pheasant']);
+function isMob(type) { return MOB_TYPES.has(type); }
+function isFlyingMob(type) { return FLYING_MOBS.has(type); }
 
 const state = {
   mode: 'build',
@@ -708,6 +766,7 @@ const state = {
   groundPainting: false,
   dragType: null,
   selectedPreset: null,
+  hotbarTab: 'terrain',
   nextId: 1,
   showIslandPanel: false,
   showListPanel: false,
@@ -825,6 +884,10 @@ transform.addEventListener('dragging-changed', (e) => {
     }
     if (obj.userData?.type === 'water') rebuildCompositeHeightMap();
     else if (state.snap) snapObjectToTerrain(obj); // XZ only — Y stays free until 落地
+    if (isMob(obj.userData?.type)) {
+      setMobHome(obj, obj.position.x, obj.position.z);
+      updateMobRadiusHelper();
+    }
   }
 });
 transform.addEventListener('objectChange', () => {
@@ -1560,37 +1623,78 @@ function sampleBasinRimMin(cells, delta, threshold = -0.08) {
   return Number.isFinite(minH) ? minH : 0;
 }
 
-/** Water mesh covering footprint cells with slight overlap so no grid seams */
+/** Water surface from dig cells — greedy-merge into non-overlapping quads (no alpha stacking) */
 function makeCellWaterMesh(cells, waterY, color) {
   const cellW = WORLD / SEG;
+  const stride = SEG + 1;
+  const set = new Set(cells.map(([ix, iy]) => iy * stride + ix));
+  const visited = new Set();
   const positions = [];
   const indices = [];
   let v = 0;
-  // Overlap neighbors so C-shaped fills stay continuous (no gaps)
-  const h = cellW * 0.5 + cellW * 0.02;
-  cells.forEach(([ix, iy]) => {
-    const cx = (ix / SEG - 0.5) * WORLD;
-    const cz = (iy / SEG - 0.5) * WORLD;
+
+  const pushRect = (ix0, iy0, nx, ny) => {
+    // Quads centered on heightmap samples, exactly abutting (no overlap)
+    const x0 = ((ix0 - 0.5) / SEG - 0.5) * WORLD;
+    const z0 = ((iy0 - 0.5) / SEG - 0.5) * WORLD;
+    const x1 = x0 + nx * cellW;
+    const z1 = z0 + ny * cellW;
     positions.push(
-      cx - h, waterY, cz - h,
-      cx + h, waterY, cz - h,
-      cx + h, waterY, cz + h,
-      cx - h, waterY, cz + h
+      x0, waterY, z0,
+      x1, waterY, z0,
+      x1, waterY, z1,
+      x0, waterY, z1
     );
     indices.push(v, v + 1, v + 2, v, v + 2, v + 3);
     v += 4;
-  });
+  };
+
+  for (const [ix, iy] of cells) {
+    const key = iy * stride + ix;
+    if (visited.has(key) || !set.has(key)) continue;
+    let w = 1;
+    while (set.has(iy * stride + (ix + w)) && !visited.has(iy * stride + (ix + w))) w++;
+    let h = 1;
+    grow: for (;;) {
+      for (let dx = 0; dx < w; dx++) {
+        const k = (iy + h) * stride + (ix + dx);
+        if (!set.has(k) || visited.has(k)) break grow;
+      }
+      h++;
+    }
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) visited.add((iy + dy) * stride + (ix + dx));
+    }
+    pushRect(ix, iy, w, h);
+  }
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
+  geo.computeBoundingSphere();
   const mesh = new THREE.Mesh(
     geo,
-    mat(color, { transparent: true, opacity: 0.74, roughness: 0.18, flatShading: true, side: THREE.DoubleSide, depthWrite: false })
+    mat(color, {
+      transparent: true,
+      opacity: 0.78,
+      roughness: 0.22,
+      flatShading: true,
+      side: THREE.DoubleSide,
+      depthWrite: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    })
   );
   mesh.name = 'waterSurf';
   mesh.renderOrder = 2;
   mesh.userData.baseY = 0;
+  // Anchor for distance culling (geometry is in world space at origin)
+  if (geo.boundingSphere) {
+    mesh.userData.cullX = geo.boundingSphere.center.x;
+    mesh.userData.cullZ = geo.boundingSphere.center.z;
+  }
   return mesh;
 }
 
@@ -1662,6 +1766,29 @@ function disposeGroupDeep(root) {
   }
 }
 
+/** Grow a cell set by `pad` rings — pulls water panels onto bank walls (clipping into terrain is fine) */
+function expandCellsByRing(cells, pad = 1) {
+  if (!cells?.length || pad <= 0) return cells || [];
+  const stride = SEG + 1;
+  const set = new Set(cells.map(([ix, iy]) => iy * stride + ix));
+  const out = new Set(set);
+  for (const key of set) {
+    const ix = key % stride, iy = (key - ix) / stride;
+    for (let dy = -pad; dy <= pad; dy++) {
+      for (let dx = -pad; dx <= pad; dx++) {
+        if (!dx && !dy) continue;
+        const nx = ix + dx, ny = iy + dy;
+        if (nx < 0 || ny < 0 || nx > SEG || ny > SEG) continue;
+        out.add(ny * stride + nx);
+      }
+    }
+  }
+  return [...out].map((k) => {
+    const ix = k % stride;
+    return [ix, (k - ix) / stride];
+  });
+}
+
 /** 穴注水 — water follows hole footprint; level = lowest rim */
 function refreshHoleWater() {
   disposeGroupDeep(holeWaterGroup);
@@ -1670,12 +1797,10 @@ function refreshHoleWater() {
     const rimR = Math.max(p.baseWidth || 4, p.baseLength || 4) * 0.5;
     const level = p.waterLevel ?? 0.12;
     const waterY = waterSurfaceY(f.x, f.z, rimR, level);
-    // Prefer cells that sit under the waterline inside the footprint (full dig coverage)
-    let cells = featureFootprintCells(f, 0.98).filter(([ix, iy]) => {
-      const { x, z } = mapIndexToWorld(ix, iy);
-      return sampleHeight(x, z) <= waterY + 0.08;
-    });
-    if (cells.length < 3) cells = featureFootprintCells(f, 0.92);
+    // Include wall-side cells even when their centers sit above the waterline —
+    // those panels clip into the bank, which is what fills the rim gap.
+    let cells = featureFootprintCells(f, 1.06);
+    if (cells.length < 3) cells = featureFootprintCells(f, 1.0);
     if (cells.length < 3) return;
     const mesh = makeCellWaterMesh(cells, waterY, p.waterColor || '#5a7a72');
     mesh.userData.holeWater = true;
@@ -1729,7 +1854,9 @@ function refreshSculptWater() {
     basins.forEach((b) => {
       const rimMin = sampleBasinRimMin(b.cells, baked);
       const waterY = rimMin - 0.12;
-      const mesh = makeCellWaterMesh(b.cells, waterY, color);
+      // One ring onto the walls so water meets the bank (panels may stick out)
+      const cells = expandCellsByRing(b.cells, 1);
+      const mesh = makeCellWaterMesh(cells, waterY, color);
       sculptWaterGroup.add(mesh);
     });
   });
@@ -1885,8 +2012,8 @@ function selectPaintLayer(kind, id) {
     state.mode = 'build';
     document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'build'));
     brushCursor.visible = false;
-    const hotbar = document.getElementById('hotbar');
-    if (hotbar) hotbar.style.display = '';
+    const wrap = document.getElementById('hotbar-wrap');
+    if (wrap) wrap.style.display = '';
     document.getElementById('panel-sculpt').style.display = 'none';
     document.getElementById('panel-ground').style.display = 'none';
     if (state.showListPanel) showLeftPanel('list');
@@ -1937,6 +2064,11 @@ function mat(color, opts = {}) {
   });
 }
 
+function cprop(props, key, fallback) {
+  const v = props?.[key];
+  return (v == null || v === '') ? fallback : v;
+}
+
 /** Muted prehistoric / ink-wash palette helpers */
 const INK = {
   pine: 0x3a4538,
@@ -1975,9 +2107,10 @@ function makeWaterBody(props) {
   mesh.name = 'waterSurf';
   g.add(mesh);
   // muddy bank stones
+  const bank = cprop(props, 'color', '#6a5a48');
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
-    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 + Math.random() * 0.15, 0), mat(0x6a5a48));
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 + Math.random() * 0.15, 0), mat(bank));
     stone.position.set(Math.cos(a) * s * 0.48, 0.08, Math.sin(a) * s * 0.48);
     g.add(stone);
   }
@@ -1989,7 +2122,9 @@ function makeTree(props) {
   const g = new THREE.Group();
   const h = props.height;
   const variant = props.variant || 'pine';
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.2, h * 0.5, 5), mat(INK.trunk));
+  const foliage = cprop(props, 'color', variant === 'bamboo' ? '#4a5540' : variant === 'plum' ? '#8a6068' : '#3a4538');
+  const trunkCol = cprop(props, 'trunkColor', '#4a3a2e');
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.2, h * 0.5, 5), mat(trunkCol));
   trunk.position.y = h * 0.25;
   trunk.castShadow = true;
   g.add(trunk);
@@ -1997,13 +2132,13 @@ function makeTree(props) {
   if (variant === 'bamboo') {
     for (let i = 0; i < 6; i++) {
       const hh = h * (0.65 + Math.random() * 0.4);
-      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, hh, 5), mat(INK.bamboo));
+      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, hh, 5), mat(foliage));
       stalk.position.set((Math.random() - 0.5) * 0.7, hh * 0.5, (Math.random() - 0.5) * 0.7);
       stalk.castShadow = true;
       g.add(stalk);
       // node rings
       for (let n = 1; n < 4; n++) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.015, 4, 8), mat(0x3a4030));
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.015, 4, 8), mat(trunkCol));
         ring.rotation.x = Math.PI / 2;
         ring.position.set(stalk.position.x, hh * n * 0.22, stalk.position.z);
         g.add(ring);
@@ -2012,17 +2147,17 @@ function makeTree(props) {
   } else if (variant === 'plum') {
     // twisted archaic plum
     for (let i = 0; i < 3; i++) {
-      const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.08, h * 0.4, 4), mat(INK.trunk));
+      const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.08, h * 0.4, 4), mat(trunkCol));
       branch.position.set((i - 1) * 0.3, h * 0.45, 0);
       branch.rotation.z = (i - 1) * 0.5;
       g.add(branch);
     }
-    const canopy = new THREE.Mesh(new THREE.IcosahedronGeometry(h * 0.3, 0), mat(INK.plum));
+    const canopy = new THREE.Mesh(new THREE.IcosahedronGeometry(h * 0.3, 0), mat(foliage));
     canopy.position.y = h * 0.65;
     canopy.castShadow = true;
     g.add(canopy);
     for (let i = 0; i < 10; i++) {
-      const b = new THREE.Mesh(new THREE.SphereGeometry(0.07, 4, 3), mat(0xc8b0b0));
+      const b = new THREE.Mesh(new THREE.SphereGeometry(0.07, 4, 3), mat(cprop(props, 'color2', '#c8b0b0')));
       const a = Math.random() * Math.PI * 2;
       b.position.set(Math.cos(a) * h * 0.25, h * 0.55 + Math.random() * 0.3, Math.sin(a) * h * 0.25);
       g.add(b);
@@ -2032,7 +2167,7 @@ function makeTree(props) {
     for (let i = 0; i < 4; i++) {
       const cone = new THREE.Mesh(
         new THREE.ConeGeometry(h * (0.4 - i * 0.07), h * 0.32, 6),
-        mat(INK.pine)
+        mat(foliage)
       );
       cone.position.set((hash2(i, 2) - 0.5) * 0.2, h * 0.35 + i * h * 0.18, (hash2(i, 5) - 0.5) * 0.2);
       cone.castShadow = true;
@@ -2046,6 +2181,8 @@ function makeTree(props) {
 function makeRock(props) {
   const g = new THREE.Group();
   const s = props.size;
+  const c1 = cprop(props, 'color', '#5a554c');
+  const c2 = cprop(props, 'color2', '#4a4840');
   // cluster of irregular stones
   const count = 2 + Math.floor(props.roughness * 3);
   for (let i = 0; i < count; i++) {
@@ -2056,7 +2193,7 @@ function makeRock(props) {
       pos.setXYZ(j, pos.getX(j) * n, pos.getY(j) * n * 0.75, pos.getZ(j) * n);
     }
     geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, mat(i % 2 ? 0x5a5248 : 0x4a453c));
+    const mesh = new THREE.Mesh(geo, mat(i % 2 ? c1 : c2));
     mesh.position.set((hash2(i, 3) - 0.5) * s * 0.6, s * 0.2, (hash2(i, 7) - 0.5) * s * 0.6);
     mesh.rotation.set(hash2(i, 4), hash2(i, 5) * 3, hash2(i, 6));
     mesh.castShadow = true;
@@ -2071,22 +2208,24 @@ function makeShrine(props) {
   const g = new THREE.Group();
   const sc = props.scale;
   const style = props.style || 'cairn';
+  const c1 = cprop(props, 'color', '#5a5448');
+  const c2 = cprop(props, 'color2', '#6a6255');
 
   if (style === 'bones') {
     // bone altar: circle of long bones + skull-like mass
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
-      const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * sc, 0.08 * sc, 1.2 * sc, 5), mat(0xd8c8a8));
+      const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * sc, 0.08 * sc, 1.2 * sc, 5), mat(c2));
       bone.position.set(Math.cos(a) * 0.9 * sc, 0.15 * sc, Math.sin(a) * 0.9 * sc);
       bone.rotation.z = Math.PI / 2;
       bone.rotation.y = a;
       g.add(bone);
     }
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.35 * sc, 6, 5), mat(0xe0d4b8));
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.35 * sc, 6, 5), mat(c2));
     skull.position.y = 0.45 * sc;
     skull.scale.set(1, 0.85, 1.15);
     g.add(skull);
-    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.4 * sc, 0.12 * sc, 0.25 * sc), mat(0xc8b898));
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.4 * sc, 0.12 * sc, 0.25 * sc), mat(c1));
     jaw.position.set(0, 0.22 * sc, 0.2 * sc);
     g.add(jaw);
   } else if (style === 'circle') {
@@ -2094,13 +2233,13 @@ function makeShrine(props) {
     for (let i = 0; i < 7; i++) {
       const a = (i / 7) * Math.PI * 2;
       const h = (0.8 + hash2(i, 1) * 0.6) * sc;
-      const slab = new THREE.Mesh(new THREE.BoxGeometry(0.25 * sc, h, 0.12 * sc), mat(0x6a6258));
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(0.25 * sc, h, 0.12 * sc), mat(c1));
       slab.position.set(Math.cos(a) * 1.1 * sc, h * 0.5, Math.sin(a) * 1.1 * sc);
       slab.rotation.y = -a;
       slab.castShadow = true;
       g.add(slab);
     }
-    const center = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * sc, 0.4 * sc, 0.2 * sc, 6), mat(0x5a5048));
+    const center = new THREE.Mesh(new THREE.CylinderGeometry(0.35 * sc, 0.4 * sc, 0.2 * sc, 6), mat(c2));
     center.position.y = 0.1 * sc;
     g.add(center);
   } else {
@@ -2116,7 +2255,7 @@ function makeShrine(props) {
         const a = (i / L.n) * Math.PI * 2 + li * 0.3;
         const stone = new THREE.Mesh(
           new THREE.DodecahedronGeometry(L.s * sc, 0),
-          mat(li % 2 ? 0x5a5448 : 0x6a6255)
+          mat(li % 2 ? c1 : c2)
         );
         stone.position.set(Math.cos(a) * L.r * sc, L.y * sc, Math.sin(a) * L.r * sc);
         stone.rotation.set(hash2(li, i), hash2(i, li) * 2, 0);
@@ -2125,7 +2264,7 @@ function makeShrine(props) {
       }
     });
     // offering bowl (hollowed stone)
-    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.2 * sc, 0.15 * sc, 0.12 * sc, 8), mat(0x4a4038));
+    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.2 * sc, 0.15 * sc, 0.12 * sc, 8), mat(c1));
     bowl.position.y = 1.35 * sc;
     g.add(bowl);
   }
@@ -2138,15 +2277,17 @@ function makeTotem(props) {
   const g = new THREE.Group();
   const sc = props.scale;
   const style = props.style || 'bone';
+  const c1 = cprop(props, 'color', style === 'wood' ? '#5a3a28' : '#d0c0a0');
+  const c2 = cprop(props, 'color2', style === 'wood' ? '#6a4a30' : '#e8dcc0');
 
   if (style === 'wood') {
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * sc, 0.25 * sc, 3.2 * sc, 6), mat(0x5a3a28));
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * sc, 0.25 * sc, 3.2 * sc, 6), mat(c1));
     pole.position.y = 1.6 * sc;
     pole.castShadow = true;
     g.add(pole);
     // carved faces — stacked boxes with hollow eyes
     for (let i = 0; i < 3; i++) {
-      const face = new THREE.Mesh(new THREE.BoxGeometry(0.55 * sc, 0.7 * sc, 0.35 * sc), mat(0x6a4a30));
+      const face = new THREE.Mesh(new THREE.BoxGeometry(0.55 * sc, 0.7 * sc, 0.35 * sc), mat(c2));
       face.position.y = (0.7 + i * 0.85) * sc;
       g.add(face);
       for (const side of [-1, 1]) {
@@ -2160,30 +2301,30 @@ function makeTotem(props) {
     }
     // antler-like branches
     for (const side of [-1, 1]) {
-      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.04 * sc, 0.06 * sc, 1.0 * sc, 4), mat(0x4a3020));
+      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.04 * sc, 0.06 * sc, 1.0 * sc, 4), mat(c1));
       ant.position.set(side * 0.4 * sc, 3.0 * sc, 0);
       ant.rotation.z = side * 0.7;
       g.add(ant);
     }
   } else {
     // stacked bone totem
-    const spine = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * sc, 0.15 * sc, 2.8 * sc, 5), mat(0xd0c0a0));
+    const spine = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * sc, 0.15 * sc, 2.8 * sc, 5), mat(c1));
     spine.position.y = 1.4 * sc;
     spine.castShadow = true;
     g.add(spine);
     for (let i = 0; i < 5; i++) {
-      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.35 * sc, 0.05 * sc, 4, 10, Math.PI), mat(0xe0d4b8));
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.35 * sc, 0.05 * sc, 4, 10, Math.PI), mat(c2));
       rib.position.y = (0.5 + i * 0.45) * sc;
       rib.rotation.y = (i % 2) * 0.3;
       g.add(rib);
     }
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.32 * sc, 6, 5), mat(0xe8dcc0));
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.32 * sc, 6, 5), mat(c2));
     head.position.y = 3.0 * sc;
     head.scale.set(1, 1.1, 1.2);
     g.add(head);
     // horns
     for (const side of [-1, 1]) {
-      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.08 * sc, 0.7 * sc, 5), mat(0xc8b898));
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.08 * sc, 0.7 * sc, 5), mat(c1));
       horn.position.set(side * 0.25 * sc, 3.4 * sc, -0.05 * sc);
       horn.rotation.z = side * -0.4;
       g.add(horn);
@@ -2197,12 +2338,14 @@ function makeMonolith(props) {
   const g = new THREE.Group();
   const sc = props.scale;
   const style = props.style || 'slab';
+  const c1 = cprop(props, 'color', '#5c564c');
+  const c2 = cprop(props, 'color2', '#4a453c');
 
   if (style === 'split') {
     for (let i = 0; i < 2; i++) {
       const slab = new THREE.Mesh(
         new THREE.BoxGeometry(0.5 * sc, (2.2 + i * 0.4) * sc, 0.2 * sc),
-        mat(0x5a554c)
+        mat(c1)
       );
       slab.position.set((i - 0.5) * 0.45 * sc, (1.1 + i * 0.2) * sc, 0);
       slab.rotation.z = (i - 0.5) * 0.08;
@@ -2211,25 +2354,25 @@ function makeMonolith(props) {
     }
   } else if (style === 'obelisk') {
     const geo = new THREE.CylinderGeometry(0.15 * sc, 0.35 * sc, 3.5 * sc, 4);
-    const mesh = new THREE.Mesh(geo, mat(0x4a4840));
+    const mesh = new THREE.Mesh(geo, mat(c1));
     mesh.position.y = 1.75 * sc;
     mesh.castShadow = true;
     g.add(mesh);
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.18 * sc, 0.4 * sc, 4), mat(0x6a6558));
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.18 * sc, 0.4 * sc, 4), mat(c2));
     tip.position.y = 3.7 * sc;
     g.add(tip);
   } else {
     // weathered standing slab with carved notch
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(0.7 * sc, 2.8 * sc, 0.25 * sc), mat(0x5c564c));
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(0.7 * sc, 2.8 * sc, 0.25 * sc), mat(c1));
     slab.position.y = 1.4 * sc;
     slab.castShadow = true;
     g.add(slab);
-    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.25 * sc, 0.35 * sc, 0.1 * sc), mat(0x3a3830));
+    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.25 * sc, 0.35 * sc, 0.1 * sc), mat(c2));
     notch.position.set(0, 2.0 * sc, 0.12 * sc);
     g.add(notch);
     // base rubble
     for (let i = 0; i < 4; i++) {
-      const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 * sc, 0), mat(0x4a453c));
+      const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 * sc, 0), mat(c2));
       r.position.set((hash2(i, 1) - 0.5) * 0.8 * sc, 0.1 * sc, (hash2(i, 2) - 0.5) * 0.5 * sc);
       g.add(r);
     }
@@ -2243,12 +2386,14 @@ function makeBridge(props) {
   const g = new THREE.Group();
   const sc = props.scale;
   const style = props.style || 'log';
+  const c1 = cprop(props, 'color', '#5a4030');
+  const c2 = cprop(props, 'color2', '#3a5a30');
 
   if (style === 'stones') {
     for (let i = -3; i <= 3; i++) {
       const stone = new THREE.Mesh(
         new THREE.DodecahedronGeometry(0.35 * sc * (0.8 + Math.abs(i) * 0.05), 0),
-        mat(0x5a5448)
+        mat(c1)
       );
       const arch = Math.cos((i / 3) * Math.PI * 0.5) * 0.5 * sc;
       stone.position.set(0, 0.2 * sc + arch, i * 0.55 * sc);
@@ -2260,7 +2405,7 @@ function makeBridge(props) {
     for (const side of [-1, 1]) {
       const log = new THREE.Mesh(
         new THREE.CylinderGeometry(0.18 * sc, 0.22 * sc, 4.2 * sc, 7),
-        mat(side < 0 ? 0x5a4030 : 0x4a3528)
+        mat(c1)
       );
       log.rotation.x = Math.PI / 2;
       log.position.set(side * 0.28 * sc, 0.35 * sc, 0);
@@ -2270,7 +2415,7 @@ function makeBridge(props) {
       g.add(log);
       // bark rings
       for (let i = -2; i <= 2; i++) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2 * sc, 0.025 * sc, 4, 8), mat(0x3a2818));
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2 * sc, 0.025 * sc, 4, 8), mat(c2));
         ring.position.set(side * 0.28 * sc, 0.35 * sc, i * 0.7 * sc);
         g.add(ring);
       }
@@ -2279,7 +2424,7 @@ function makeBridge(props) {
     for (let i = -1; i <= 1; i++) {
       const vine = new THREE.Mesh(
         new THREE.CylinderGeometry(0.03 * sc, 0.03 * sc, 0.7 * sc, 4),
-        mat(0x3a5a30)
+        mat(c2)
       );
       vine.position.set(0, 0.55 * sc, i * 1.2 * sc);
       vine.rotation.z = Math.PI / 2;
@@ -2293,10 +2438,12 @@ function makeBridge(props) {
 function makeFirepit(props) {
   const g = new THREE.Group();
   const sc = props.scale;
+  const stoneCol = cprop(props, 'color', '#4a453c');
+  const flameCol = cprop(props, 'color2', '#b85a30');
   // ring of stones
   for (let i = 0; i < 9; i++) {
     const a = (i / 9) * Math.PI * 2;
-    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22 * sc, 0), mat(0x4a453c));
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22 * sc, 0), mat(stoneCol));
     stone.position.set(Math.cos(a) * 0.7 * sc, 0.12 * sc, Math.sin(a) * 0.7 * sc);
     g.add(stone);
   }
@@ -2314,12 +2461,12 @@ function makeFirepit(props) {
   // flame (emissive cones)
   const flame = new THREE.Mesh(
     new THREE.ConeGeometry(0.2 * sc, 0.7 * sc, 5),
-    mat(INK.flame, { emissive: 0x8a3a18, emissiveIntensity: 0.35 })
+    mat(flameCol, { emissive: flameCol, emissiveIntensity: 0.35 })
   );
   flame.position.y = 0.5 * sc;
   flame.name = 'flame';
   g.add(flame);
-  const glow = new THREE.PointLight(0xaa5522, 0.35, 4 * sc, 2);
+  const glow = new THREE.PointLight(new THREE.Color(flameCol), 0.35, 4 * sc, 2);
   glow.position.y = 0.6 * sc;
   glow.castShadow = false;
   g.add(glow);
@@ -2330,10 +2477,12 @@ function makeFirepit(props) {
 function makeNest(props) {
   const g = new THREE.Group();
   const sc = props.scale;
+  const stickCol = cprop(props, 'color', '#6a5038');
+  const eggCol = cprop(props, 'color2', '#d8c8a0');
   // giant bird nest — tangled torus of sticks
   const nest = new THREE.Mesh(
     new THREE.TorusGeometry(0.9 * sc, 0.35 * sc, 6, 14),
-    mat(0x6a5038)
+    mat(stickCol)
   );
   nest.rotation.x = Math.PI / 2;
   nest.position.y = 0.35 * sc;
@@ -2343,7 +2492,7 @@ function makeNest(props) {
   for (let i = 0; i < 14; i++) {
     const stick = new THREE.Mesh(
       new THREE.CylinderGeometry(0.03 * sc, 0.04 * sc, (0.6 + Math.random() * 0.8) * sc, 3),
-      mat(hash2(i, 1) > 0.5 ? 0x5a4030 : 0x4a3828)
+      mat(stickCol)
     );
     const a = Math.random() * Math.PI * 2;
     stick.position.set(Math.cos(a) * 0.7 * sc, 0.3 * sc + Math.random() * 0.3, Math.sin(a) * 0.7 * sc);
@@ -2352,7 +2501,7 @@ function makeNest(props) {
   }
   // eggs
   for (let i = 0; i < 2; i++) {
-    const egg = new THREE.Mesh(new THREE.SphereGeometry(0.2 * sc, 6, 5), mat(0xd8c8a0));
+    const egg = new THREE.Mesh(new THREE.SphereGeometry(0.2 * sc, 6, 5), mat(eggCol));
     egg.position.set((i - 0.5) * 0.3 * sc, 0.35 * sc, 0);
     egg.scale.set(1, 1.25, 1);
     g.add(egg);
@@ -2360,6 +2509,319 @@ function makeNest(props) {
   g.rotation.y = props.rotation;
   return g;
 }
+
+/** 猩猩 — long-armed ape spirit */
+function makeOrangutan(props) {
+  const g = new THREE.Group();
+  const sc = props.scale || 0.72;
+  const fur = cprop(props, 'color', '#9a5a32');
+  const dark = cprop(props, 'color2', '#3a2818');
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.35 * sc, 7, 6), mat(fur));
+  body.scale.set(1.15, 1.3, 0.95);
+  body.position.y = 0.72 * sc;
+  body.castShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22 * sc, 7, 6), mat(fur));
+  head.position.y = 1.18 * sc;
+  head.castShadow = true;
+  g.add(head);
+  const face = new THREE.Mesh(new THREE.SphereGeometry(0.13 * sc, 6, 5), mat(dark));
+  face.position.set(0, 1.14 * sc, 0.15 * sc);
+  face.scale.set(0.95, 1.05, 0.7);
+  g.add(face);
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * sc, 0.09 * sc, 0.9 * sc, 5), mat(fur));
+    arm.position.set(side * 0.34 * sc, 0.58 * sc, 0.04 * sc);
+    arm.rotation.z = side * 0.6;
+    arm.name = side < 0 ? 'armL' : 'armR';
+    arm.castShadow = true;
+    g.add(arm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.08 * sc, 5, 4), mat(dark));
+    hand.position.set(side * 0.58 * sc, 0.16 * sc, 0.1 * sc);
+    g.add(hand);
+  }
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * sc, 0.1 * sc, 0.48 * sc, 5), mat(fur));
+    leg.position.set(side * 0.13 * sc, 0.24 * sc, 0);
+    leg.name = side < 0 ? 'legL' : 'legR';
+    g.add(leg);
+  }
+  g.rotation.y = props.rotation || 0;
+  g.userData.isMob = true;
+  return g;
+}
+
+/** 狐 — sleek pointed fox, tapered body & bushy cone tail */
+function makeFox(props) {
+  const g = new THREE.Group();
+  const sc = props.scale || 0.55;
+  const fur = cprop(props, 'color', '#c46830');
+  const soft = cprop(props, 'color2', '#f0e8e0');
+  const dark = '#2a2018';
+
+  // elongated torso (cylinder along Z)
+  const torso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16 * sc, 0.2 * sc, 0.55 * sc, 6),
+    mat(fur)
+  );
+  torso.rotation.x = Math.PI / 2;
+  torso.position.set(0, 0.38 * sc, 0.02 * sc);
+  torso.castShadow = true;
+  g.add(torso);
+  // chest / belly wedge
+  const chest = new THREE.Mesh(new THREE.ConeGeometry(0.14 * sc, 0.28 * sc, 5), mat(soft));
+  chest.rotation.x = Math.PI / 2;
+  chest.position.set(0, 0.28 * sc, 0.18 * sc);
+  chest.scale.set(0.85, 1, 0.55);
+  g.add(chest);
+  // haunches
+  const rump = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * sc, 0.14 * sc, 0.22 * sc, 6), mat(fur));
+  rump.rotation.x = Math.PI / 2;
+  rump.position.set(0, 0.36 * sc, -0.22 * sc);
+  g.add(rump);
+
+  // neck + head cluster
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * sc, 0.1 * sc, 0.16 * sc, 5), mat(fur));
+  neck.rotation.x = Math.PI / 2.4;
+  neck.position.set(0, 0.44 * sc, 0.32 * sc);
+  g.add(neck);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.2 * sc, 0.18 * sc, 0.22 * sc), mat(fur));
+  head.position.set(0, 0.5 * sc, 0.46 * sc);
+  head.castShadow = true;
+  g.add(head);
+  // long snout
+  const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.02 * sc, 0.07 * sc, 0.2 * sc, 5), mat(soft));
+  snout.rotation.x = Math.PI / 2;
+  snout.position.set(0, 0.44 * sc, 0.6 * sc);
+  g.add(snout);
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.035 * sc, 5, 4), mat(dark));
+  nose.position.set(0, 0.44 * sc, 0.7 * sc);
+  g.add(nose);
+  // tall triangular ears
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.06 * sc, 0.18 * sc, 3), mat(fur));
+    ear.position.set(side * 0.09 * sc, 0.64 * sc, 0.42 * sc);
+    ear.rotation.z = side * -0.18;
+    ear.rotation.x = -0.15;
+    g.add(ear);
+    const inner = new THREE.Mesh(new THREE.ConeGeometry(0.03 * sc, 0.1 * sc, 3), mat(soft));
+    inner.position.set(side * 0.09 * sc, 0.6 * sc, 0.44 * sc);
+    inner.rotation.z = side * -0.18;
+    g.add(inner);
+  }
+
+  // articulated legs (groups for walk anim)
+  const placeLeg = (name, x, z, bend) => {
+    const leg = new THREE.Group();
+    leg.name = name;
+    leg.position.set(x, 0.28 * sc, z);
+    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.035 * sc, 0.04 * sc, 0.16 * sc, 4), mat(fur));
+    upper.position.y = -0.06 * sc;
+    upper.rotation.x = bend;
+    leg.add(upper);
+    const lower = new THREE.Mesh(new THREE.CylinderGeometry(0.025 * sc, 0.032 * sc, 0.16 * sc, 4), mat(fur));
+    lower.position.set(0, -0.2 * sc, bend * 0.05 * sc);
+    leg.add(lower);
+    const paw = new THREE.Mesh(new THREE.BoxGeometry(0.06 * sc, 0.03 * sc, 0.08 * sc), mat(dark));
+    paw.position.set(0, -0.3 * sc, 0.01 * sc);
+    leg.add(paw);
+    g.add(leg);
+  };
+  placeLeg('legLF', -0.11 * sc, 0.16 * sc, 0.12);
+  placeLeg('legRF', 0.11 * sc, 0.16 * sc, 0.12);
+  placeLeg('legL', -0.11 * sc, -0.18 * sc, -0.08);
+  placeLeg('legR', 0.11 * sc, -0.18 * sc, -0.08);
+
+  // bushy tapered tail (multi-segment)
+  const tail = new THREE.Group();
+  tail.name = 'tail';
+  tail.position.set(0, 0.4 * sc, -0.34 * sc);
+  tail.rotation.x = -0.55;
+  const segN = 4;
+  for (let i = 0; i < segN; i++) {
+    const t = i / (segN - 1);
+    const rad = (0.11 - t * 0.07) * sc;
+    const seg = new THREE.Mesh(
+      new THREE.CylinderGeometry(rad * 0.7, rad, 0.16 * sc, 6),
+      mat(i === segN - 1 ? soft : fur)
+    );
+    seg.position.z = -i * 0.13 * sc;
+    seg.position.y = Math.sin(t * 0.6) * 0.04 * sc;
+    tail.add(seg);
+  }
+  g.add(tail);
+
+  g.rotation.y = props.rotation || 0;
+  g.userData.isMob = true;
+  return g;
+}
+
+/** Flat diamond wing blade (less boxy than a plain slab) */
+function makeWingBlade(span, chord, thick, color) {
+  const geo = new THREE.BufferGeometry();
+  const s = span, c = chord, h = thick;
+  // asymmetric diamond: root → tip, leading & trailing edge
+  const verts = new Float32Array([
+    0, 0, 0,          // 0 root
+    s * 0.55, h, -c * 0.15, // 1 mid top
+    s, 0, c * 0.05,   // 2 tip
+    s * 0.5, -h, c * 0.35, // 3 mid bottom / trailing
+    s * 0.25, 0, -c * 0.45, // 4 leading
+  ]);
+  const idx = [
+    0, 4, 1,  0, 1, 2,  0, 2, 3,  0, 3, 4,
+    4, 2, 1,  1, 2, 3,
+  ];
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return new THREE.Mesh(geo, mat(color, { side: THREE.DoubleSide, flatShading: true }));
+}
+
+/** Shared bird body — kind: goose | swallow | pheasant */
+function makeBird(props, kind) {
+  const g = new THREE.Group();
+  const sc = props.scale || 0.45;
+  const fur = cprop(props, 'color', '#6a7068');
+  const accent = cprop(props, 'color2', '#c8c0a8');
+  const isSwallow = kind === 'swallow';
+  const isPheasant = kind === 'pheasant';
+  const isGoose = kind === 'goose';
+
+  const bodyR0 = isSwallow ? 0.07 : isPheasant ? 0.1 : 0.12;
+  const bodyR1 = isSwallow ? 0.1 : isPheasant ? 0.14 : 0.16;
+  const bodyLen = isSwallow ? 0.34 : isPheasant ? 0.42 : 0.52;
+  // fuselage along Z
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(bodyR0 * sc, bodyR1 * sc, bodyLen * sc, 6),
+    mat(fur)
+  );
+  body.rotation.x = Math.PI / 2;
+  body.position.set(0, 0.1 * sc, 0);
+  body.castShadow = true;
+  g.add(body);
+  // belly keel
+  const keel = new THREE.Mesh(
+    new THREE.CylinderGeometry(bodyR0 * 0.55 * sc, bodyR1 * 0.65 * sc, bodyLen * 0.85 * sc, 5),
+    mat(accent)
+  );
+  keel.rotation.x = Math.PI / 2;
+  keel.position.set(0, 0.02 * sc, 0.02 * sc);
+  keel.scale.set(0.7, 1, 0.55);
+  g.add(keel);
+
+  // neck + head (goose has longer neck)
+  const neckLen = isGoose ? 0.22 : isSwallow ? 0.08 : 0.12;
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035 * sc, 0.06 * sc, neckLen * sc, 5),
+    mat(fur)
+  );
+  neck.rotation.x = isGoose ? Math.PI / 2.6 : Math.PI / 2.2;
+  neck.position.set(0, 0.16 * sc, bodyLen * 0.42 * sc);
+  g.add(neck);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry((isSwallow ? 0.1 : 0.14) * sc, (isSwallow ? 0.09 : 0.12) * sc, (isSwallow ? 0.12 : 0.16) * sc),
+    mat(fur)
+  );
+  head.position.set(0, (isGoose ? 0.28 : 0.2) * sc, bodyLen * 0.42 * sc + neckLen * 0.7 * sc);
+  head.castShadow = true;
+  g.add(head);
+  // beak wedge
+  const beakLen = isSwallow ? 0.1 : isGoose ? 0.16 : 0.12;
+  const beak = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.008 * sc, (isSwallow ? 0.025 : 0.04) * sc, beakLen * sc, 4),
+    mat(isPheasant ? '#c47830' : '#2a2820')
+  );
+  beak.rotation.x = Math.PI / 2;
+  beak.position.set(0, head.position.y - 0.01 * sc, head.position.z + beakLen * 0.55 * sc);
+  g.add(beak);
+
+  // wings — diamond blades on hinge groups
+  const span = isSwallow ? 0.55 : isPheasant ? 0.48 : 0.62;
+  const chord = isSwallow ? 0.22 : isPheasant ? 0.26 : 0.32;
+  for (const side of [-1, 1]) {
+    const hinge = new THREE.Group();
+    hinge.name = side < 0 ? 'wingL' : 'wingR';
+    hinge.position.set(side * bodyR1 * 0.9 * sc, 0.14 * sc, 0.02 * sc);
+    const blade = makeWingBlade(span * sc, chord * sc, 0.025 * sc, fur);
+    if (side < 0) blade.scale.x = -1;
+    blade.rotation.z = side * 0.08;
+    blade.rotation.y = side * -0.12;
+    hinge.add(blade);
+    // secondary tip feather
+    const tip = new THREE.Mesh(
+      new THREE.ConeGeometry(0.04 * sc, span * 0.35 * sc, 3),
+      mat(accent)
+    );
+    tip.rotation.z = side * Math.PI / 2;
+    tip.position.set(side * span * 0.85 * sc, 0, -chord * 0.1 * sc);
+    hinge.add(tip);
+    g.add(hinge);
+  }
+
+  // tails
+  if (isPheasant) {
+    const tail = new THREE.Group();
+    tail.name = 'tail';
+    tail.position.set(0, 0.12 * sc, -bodyLen * 0.48 * sc);
+    for (let i = 0; i < 3; i++) {
+      const ribbon = new THREE.Mesh(
+        new THREE.BoxGeometry((0.04 - i * 0.008) * sc, 0.02 * sc, (0.55 - i * 0.08) * sc),
+        mat(i === 0 ? accent : fur)
+      );
+      ribbon.position.set((i - 1) * 0.04 * sc, i * 0.015 * sc, -0.2 * sc);
+      ribbon.rotation.x = -0.2 - i * 0.05;
+      tail.add(ribbon);
+    }
+    g.add(tail);
+  } else if (isSwallow) {
+    const tail = new THREE.Group();
+    tail.name = 'tail';
+    tail.position.set(0, 0.1 * sc, -bodyLen * 0.48 * sc);
+    for (const side of [-1, 1]) {
+      const fork = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05 * sc, 0.015 * sc, 0.32 * sc),
+        mat(fur)
+      );
+      fork.position.set(side * 0.08 * sc, 0, -0.12 * sc);
+      fork.rotation.y = side * 0.45;
+      fork.rotation.z = side * 0.15;
+      tail.add(fork);
+    }
+    g.add(tail);
+  } else {
+    // goose fan
+    const tail = new THREE.Group();
+    tail.name = 'tail';
+    tail.position.set(0, 0.1 * sc, -bodyLen * 0.48 * sc);
+    for (let i = -2; i <= 2; i++) {
+      const f = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06 * sc, 0.015 * sc, 0.22 * sc),
+        mat(Math.abs(i) === 2 ? accent : fur)
+      );
+      f.position.set(i * 0.045 * sc, 0, -0.08 * sc);
+      f.rotation.y = i * 0.12;
+      tail.add(f);
+    }
+    g.add(tail);
+  }
+
+  // tiny tucked feet
+  for (const side of [-1, 1]) {
+    const foot = new THREE.Mesh(new THREE.ConeGeometry(0.025 * sc, 0.08 * sc, 3), mat('#2a2820'));
+    foot.position.set(side * 0.06 * sc, -0.02 * sc, 0.06 * sc);
+    foot.rotation.x = Math.PI;
+    g.add(foot);
+  }
+
+  g.rotation.y = props.rotation || 0;
+  g.userData.isMob = true;
+  g.userData.flies = true;
+  return g;
+}
+function makeGoose(props) { return makeBird(props, 'goose'); }
+function makeSwallow(props) { return makeBird(props, 'swallow'); }
+function makePheasant(props) { return makeBird(props, 'pheasant'); }
 
 const FACTORIES = {
   water: makeWaterBody,
@@ -2372,7 +2834,191 @@ const FACTORIES = {
   bridge: makeBridge,
   firepit: makeFirepit,
   nest: makeNest,
+  orangutan: makeOrangutan,
+  fox: makeFox,
+  goose: makeGoose,
+  swallow: makeSwallow,
+  pheasant: makePheasant,
 };
+
+function initMobBrain(mesh, props, home) {
+  const hx = home?.x ?? mesh.position.x;
+  const hz = home?.z ?? mesh.position.z;
+  const flying = isFlyingMob(mesh.userData?.type);
+  const ground = sampleHeight(hx, hz);
+  const flyH = props?.flyHeight ?? 4;
+  mesh.userData.mob = {
+    homeX: hx,
+    homeZ: hz,
+    homeY: flying ? (home?.y ?? ground + flyH) : ground,
+    tx: hx,
+    tz: hz,
+    ty: flying ? (home?.y ?? ground + flyH) : ground,
+    wait: 0.4 + Math.random() * 1.2,
+    phase: Math.random() * Math.PI * 2,
+  };
+}
+
+function setMobHome(mesh, x, z) {
+  if (!mesh.userData.mob) initMobBrain(mesh, mesh.userData.props || {}, { x, z, y: mesh.position.y });
+  const m = mesh.userData.mob;
+  const p = mesh.userData.props || {};
+  m.homeX = x; m.homeZ = z; m.tx = x; m.tz = z; m.wait = 0.3;
+  if (isFlyingMob(mesh.userData?.type)) {
+    const ground = sampleHeight(x, z);
+    const y = Math.max(mesh.position.y, ground + (p.flyHeight ?? 3) * 0.5);
+    m.homeY = y; m.ty = y;
+  }
+}
+
+function updateMobs(dt) {
+  for (const o of state.objects) {
+    if (!isMob(o.type)) continue;
+    const mesh = o.mesh;
+    const p = o.props;
+    if (!mesh.userData.mob) initMobBrain(mesh, p);
+    const m = mesh.userData.mob;
+    const flying = isFlyingMob(o.type);
+    // Freeze while gizmo-dragging or selected in edit (easier to place)
+    if (transformDragging && state.selectedObj === mesh) continue;
+    if (!play.active && state.selectedObj === mesh) {
+      m.homeX = mesh.position.x;
+      m.homeZ = mesh.position.z;
+      if (flying) m.homeY = mesh.position.y;
+      continue;
+    }
+
+    const radius = Math.max(0.5, p.wanderRadius ?? 6);
+    const flyH = p.flyHeight ?? 4;
+    const speed = (
+      o.type === 'swallow' ? 2.2
+        : o.type === 'goose' ? 1.6
+          : o.type === 'pheasant' ? 1.4
+            : o.type === 'fox' ? 1.35
+              : 0.85
+    ) * (p.scale || 0.6);
+
+    if (m.wait > 0) {
+      m.wait -= dt;
+      m.phase += dt * (flying ? 8 : 2.2);
+      if (flying) {
+        const wingL = mesh.getObjectByName('wingL');
+        const wingR = mesh.getObjectByName('wingR');
+        const flap = Math.sin(m.phase) * (o.type === 'swallow' ? 0.55 : 0.35);
+        if (wingL) wingL.rotation.z = -0.2 + flap;
+        if (wingR) wingR.rotation.z = 0.2 - flap;
+        // gentle hover bob while waiting
+        const ground = sampleHeight(mesh.position.x, mesh.position.z);
+        const base = (m.homeY ?? ground + flyH);
+        mesh.position.y = base + Math.sin(m.phase * 0.6) * 0.12;
+      } else {
+        const armL = mesh.getObjectByName('armL');
+        const armR = mesh.getObjectByName('armR');
+        if (armL) armL.rotation.x = Math.sin(m.phase) * 0.08;
+        if (armR) armR.rotation.x = Math.sin(m.phase + 1) * 0.08;
+        const tail = mesh.getObjectByName('tail');
+        if (tail) tail.rotation.y = Math.sin(m.phase * 0.8) * 0.15;
+      }
+      continue;
+    }
+
+    let dx = m.tx - mesh.position.x;
+    let dz = m.tz - mesh.position.z;
+    let dy = flying ? ((m.ty ?? mesh.position.y) - mesh.position.y) : 0;
+    let dist = Math.hypot(dx, dz, dy);
+    if (dist < 0.35) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * radius;
+      m.tx = m.homeX + Math.cos(ang) * r;
+      m.tz = m.homeZ + Math.sin(ang) * r;
+      const hy = sampleHeight(m.tx, m.tz);
+      if (!flying && hy < -0.05) {
+        m.tx = m.homeX; m.tz = m.homeZ;
+      }
+      if (flying) {
+        const loft = flyH * (0.55 + Math.random() * 0.7);
+        m.ty = hy + loft;
+        m.homeY = sampleHeight(m.homeX, m.homeZ) + flyH;
+      }
+      m.wait = flying
+        ? (0.15 + Math.random() * 0.9)
+        : (0.7 + Math.random() * 2.4);
+      continue;
+    }
+
+    const step = Math.min(dist, speed * dt);
+    mesh.position.x += (dx / dist) * step;
+    mesh.position.z += (dz / dist) * step;
+    if (flying) {
+      mesh.position.y += (dy / dist) * step;
+      const minY = sampleHeight(mesh.position.x, mesh.position.z) + 0.6;
+      if (mesh.position.y < minY) mesh.position.y = minY;
+    } else {
+      mesh.position.y = sampleHeight(mesh.position.x, mesh.position.z);
+    }
+    mesh.rotation.y = Math.atan2(dx, dz);
+    if (flying && dist > 0.01) {
+      mesh.rotation.x = Math.max(-0.35, Math.min(0.35, -dy / dist * 0.4));
+    }
+    m.phase += dt * (flying ? 14 : 10);
+    if (flying) {
+      const wingL = mesh.getObjectByName('wingL');
+      const wingR = mesh.getObjectByName('wingR');
+      const flap = Math.sin(m.phase) * (o.type === 'swallow' ? 0.7 : 0.45);
+      if (wingL) wingL.rotation.z = -0.25 + flap;
+      if (wingR) wingR.rotation.z = 0.25 - flap;
+      const tail = mesh.getObjectByName('tail');
+      if (tail) tail.rotation.y = Math.sin(m.phase * 0.5) * 0.12;
+    } else {
+      const swing = Math.sin(m.phase) * 0.35;
+      const armL = mesh.getObjectByName('armL');
+      const armR = mesh.getObjectByName('armR');
+      const legL = mesh.getObjectByName('legL');
+      const legR = mesh.getObjectByName('legR');
+      const legLF = mesh.getObjectByName('legLF');
+      const legRF = mesh.getObjectByName('legRF');
+      if (armL) armL.rotation.x = swing;
+      if (armR) armR.rotation.x = -swing;
+      if (legL) legL.rotation.x = -swing * 0.55;
+      if (legR) legR.rotation.x = swing * 0.55;
+      if (legLF) legLF.rotation.x = swing * 0.5;
+      if (legRF) legRF.rotation.x = -swing * 0.5;
+      const tail = mesh.getObjectByName('tail');
+      if (tail) tail.rotation.y = Math.sin(m.phase * 0.7) * 0.25;
+    }
+  }
+}
+
+let mobRadiusHelper = null;
+function clearMobRadiusHelper() {
+  if (!mobRadiusHelper) return;
+  scene.remove(mobRadiusHelper);
+  mobRadiusHelper.geometry?.dispose();
+  mobRadiusHelper.material?.dispose();
+  mobRadiusHelper = null;
+}
+function updateMobRadiusHelper() {
+  clearMobRadiusHelper();
+  const mesh = state.selectedObj;
+  if (!mesh || !isMob(mesh.userData?.type) || play.active) return;
+  const p = mesh.userData.props || {};
+  const r = Math.max(0.5, p.wanderRadius || 5);
+  const brain = mesh.userData.mob;
+  const cx = brain?.homeX ?? mesh.position.x;
+  const cz = brain?.homeZ ?? mesh.position.z;
+  const y = sampleHeight(cx, cz) + 0.04;
+  mobRadiusHelper = new THREE.Mesh(
+    new THREE.RingGeometry(Math.max(0.2, r - 0.06), r, 64),
+    new THREE.MeshBasicMaterial({
+      color: 0xc9a84c, transparent: true, opacity: 0.35,
+      side: THREE.DoubleSide, depthWrite: false,
+    })
+  );
+  mobRadiusHelper.rotation.x = -Math.PI / 2;
+  mobRadiusHelper.position.set(cx, y, cz);
+  mobRadiusHelper.name = 'mobRadiusHelper';
+  scene.add(mobRadiusHelper);
+}
 
 function snapObjectToTerrain(obj, opts = {}) {
   if (!obj) return;
@@ -2391,7 +3037,13 @@ function snapObjectToTerrain(obj, opts = {}) {
   }
   // Y only when explicitly landing (落地) — never auto-glue to the floor
   if (opts.forceGround) {
-    obj.position.y = sampleHeight(obj.position.x, obj.position.z);
+    const ground = sampleHeight(obj.position.x, obj.position.z);
+    if (isFlyingMob(obj.userData?.type)) {
+      const fh = obj.userData.props?.flyHeight ?? 4;
+      obj.position.y = ground + fh;
+    } else {
+      obj.position.y = ground;
+    }
   }
 }
 
@@ -2422,6 +3074,7 @@ function createObject(type, props, position, opts = {}) {
   scene.add(mesh);
   const entry = { id: mesh.userData.id, type, mesh, props: p };
   state.objects.push(entry);
+  if (isMob(type)) initMobBrain(mesh, p, opts.mobHome);
   if (type === 'water') rebuildCompositeHeightMap();
   refreshOutliner();
   return entry;
@@ -2444,6 +3097,9 @@ function rebuildObjectMesh(entry) {
   const pos = entry.mesh.position.clone();
   const rotY = entry.mesh.rotation.y;
   const scl = entry.mesh.scale.clone();
+  const mobHome = entry.mesh.userData.mob
+    ? { x: entry.mesh.userData.mob.homeX, z: entry.mesh.userData.mob.homeZ, y: entry.mesh.userData.mob.homeY ?? entry.mesh.position.y }
+    : null;
   entry.props.rotation = rotY;
   const was = state.selectedObj === entry.mesh;
   if (was) transform.detach();
@@ -2456,6 +3112,9 @@ function rebuildObjectMesh(entry) {
   mesh.scale.copy(scl);
   scene.add(mesh);
   entry.mesh = mesh;
+  if (isMob(entry.type)) {
+    initMobBrain(mesh, entry.props, mobHome || { x: pos.x, z: pos.z, y: pos.y });
+  }
   if (entry.type === 'water') rebuildCompositeHeightMap();
   else snapObjectToTerrain(mesh); // XZ grid only — preserve free Y
   if (was) selectObject(mesh);
@@ -2508,6 +3167,7 @@ function deselectAll() {
   selectedGroundId = null;
   layerDragStart = null;
   featureDragStart = null;
+  clearMobRadiusHelper();
   document.getElementById('xform-bar').classList.add('hidden');
   document.getElementById('props-content').innerHTML =
     '<div class="prop-empty">選取島上靈物或地形印記以編輯。</div>';
@@ -2619,6 +3279,7 @@ function selectObject(mesh, { additive = false } = {}) {
   document.getElementById('panel-right').classList.remove('hidden');
   updateGroupButtonUI();
   refreshOutliner();
+  updateMobRadiusHelper();
 }
 
 function selectFeature(f, { additive = false } = {}) {
@@ -2772,6 +3433,7 @@ function syncGroupFromProxy(final) {
       // Keep member Y free; only re-float water
       if (o.type === 'water' || o.mesh.userData.float) snapObjectToTerrain(o.mesh);
       else if (state.snap) snapObjectToTerrain(o.mesh);
+      if (isMob(o.type)) setMobHome(o.mesh, nx, nz);
       if (o.type === 'water') needsTerrain = true;
     } else if (s.kind === 'feature') {
       const f = state.features.find((x) => x.id === s.id);
@@ -2980,9 +3642,11 @@ function renderPropsObject(mesh) {
   const type = mesh.userData.type;
   const p = mesh.userData.props;
   const el = document.getElementById('props-content');
-  let html = `<div class="section"><h3>${type}</h3>`;
+  const title = PRESETS.find((x) => x.type === type)?.label || type;
+  let html = `<div class="section"><h3>${title}</h3>`;
 
   const addR = (key, label, min, max, step) => {
+    if (p[key] == null) p[key] = (min + max) / 2;
     html += `<div class="ctrl"><label>${label} <span class="val" data-k="${key}">${(+p[key]).toFixed?.(2) ?? p[key]}</span></label>
       <input type="range" data-prop="${key}" min="${min}" max="${max}" step="${step}" value="${p[key]}"/></div>`;
   };
@@ -2995,7 +3659,9 @@ function renderPropsObject(mesh) {
     });
     html += `</select></div>`;
   };
-  const addC = (key, label) => {
+  const addC = (key, label, fallback) => {
+    if (p[key] == null && fallback) p[key] = fallback;
+    if (p[key] == null) return;
     html += `<div class="ctrl"><label>${label}</label><input type="color" data-prop="${key}" value="${p[key]}"/></div>`;
   };
 
@@ -3005,34 +3671,69 @@ function renderPropsObject(mesh) {
     addR('waterLevel', '水位', 0.02, 0.6, 0.02);
     if (p.digDepth == null) p.digDepth = 0.55;
     addR('digDepth', '下窪深度', 0.2, 2.5, 0.05);
-    addC('waterColor', '水色');
+    addC('waterColor', '水色', '#5a7a72');
+    addC('color', '岸石色', '#6a5a48');
   } else if (type === 'tree' || type === 'bamboo') {
     addR('height', '高度', 0.6, 4, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('variant', '品種', type === 'bamboo' ? ['bamboo'] : ['pine', 'bamboo', 'plum']);
+    addC('color', '葉色', type === 'bamboo' ? '#4a5540' : '#3a4538');
+    addC('trunkColor', '幹色', '#4a3a2e');
+    if (p.variant === 'plum') addC('color2', '花色', '#c8b0b0');
   } else if (type === 'rock') {
     addR('size', '大小', 0.2, 2, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
     addR('roughness', '粗糙', 0, 1, 0.05);
+    addC('color', '石色', '#5a554c');
+    addC('color2', '石色 2', '#4a4840');
   } else if (type === 'shrine') {
     addR('scale', '縮放', 0.2, 1.2, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['cairn', 'circle', 'bones']);
+    addC('color', '主色', '#5a5448');
+    addC('color2', '輔色', '#6a6255');
   } else if (type === 'totem') {
     addR('scale', '縮放', 0.2, 1.2, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['bone', 'wood']);
+    addC('color', '主色', '#d0c0a0');
+    addC('color2', '輔色', '#e8dcc0');
   } else if (type === 'monolith') {
     addR('scale', '縮放', 0.2, 1.2, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['slab', 'split', 'obelisk']);
+    addC('color', '主色', '#5c564c');
+    addC('color2', '輔色', '#4a453c');
   } else if (type === 'bridge') {
     addR('scale', '縮放', 0.2, 1.2, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['log', 'stones']);
-  } else if (type === 'firepit' || type === 'nest') {
+    addC('color', '主色', '#5a4030');
+    addC('color2', '輔色', '#3a5a30');
+  } else if (type === 'firepit') {
     addR('scale', '縮放', 0.2, 1.2, 0.05);
     addR('rotation', '旋轉', 0, 6.28, 0.05);
+    addC('color', '石色', '#4a453c');
+    addC('color2', '火色', '#b85a30');
+  } else if (type === 'nest') {
+    addR('scale', '縮放', 0.2, 1.2, 0.05);
+    addR('rotation', '旋轉', 0, 6.28, 0.05);
+    addC('color', '巢色', '#6a5038');
+    addC('color2', '卵色', '#d8c8a0');
+  } else if (isMob(type)) {
+    addR('scale', '大小', 0.2, 1.6, 0.05);
+    addR('rotation', '旋轉', 0, 6.28, 0.05);
+    addR('wanderRadius', '遊走半徑', 1, 24, 0.5);
+    if (isFlyingMob(type)) {
+      addR('flyHeight', '飛高', 1, 14, 0.2);
+      addC('color', '羽色', DEFAULT_PROPS[type]?.color || '#6a7068');
+      addC('color2', '腹色', DEFAULT_PROPS[type]?.color2 || '#c8c0a8');
+      html += `<p style="font-size:0.7rem;color:#8a8070;line-height:1.35;margin-top:6px">飛鳥會在半徑與飛高範圍內盤旋 · 選取時暫停</p>`;
+    } else {
+      addC('color', '毛色', type === 'fox' ? '#c46830' : '#9a5a32');
+      addC('color2', type === 'fox' ? '白斑' : '面色', type === 'fox' ? '#f0e8e0' : '#3a2818');
+      html += `<p style="font-size:0.7rem;color:#8a8070;line-height:1.35;margin-top:6px">遊歷／編輯時會在黃圈半徑內閒逛 · 選取時暫停</p>`;
+    }
   }
 
   html += `</div>`;
@@ -3041,6 +3742,7 @@ function renderPropsObject(mesh) {
     const entry = state.objects.find((o) => o.mesh === mesh);
     if (!entry) return;
     rebuildObjectMesh(entry);
+    if (isMob(entry.type)) updateMobRadiusHelper();
   }, mesh);
 }
 
@@ -3252,37 +3954,73 @@ function renderThumb(type) {
   return c;
 }
 
-PRESETS.forEach((pr) => {
-  const slot = document.createElement('div');
-  slot.className = 'slot';
-  slot.dataset.type = pr.type;
-  slot.title = pr.label;
-  const thumb = renderThumb(pr.type);
-  const name = document.createElement('span');
-  name.className = 'name';
-  name.textContent = pr.label;
-  slot.appendChild(thumb);
-  slot.appendChild(name);
-  slot.addEventListener('pointerdown', (e) => {
-    if (state.mode !== 'build') return;
-    document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
-    slot.classList.add('selected');
-    state.selectedPreset = pr.type;
-    state.dragType = pr.type;
-    // ghost = clone of thumbnail
-    ghost.innerHTML = '';
-    const gImg = document.createElement('img');
-    gImg.src = thumb.toDataURL('image/png');
-    gImg.style.width = '48px';
-    gImg.style.height = '48px';
-    ghost.appendChild(gImg);
-    ghost.style.display = 'block';
-    ghost.style.left = e.clientX + 'px';
-    ghost.style.top = e.clientY + 'px';
-    dropping = true;
-  });
-  hotbar.appendChild(slot);
+const thumbCache = {};
+PRESETS.forEach((pr) => { thumbCache[pr.type] = renderThumb(pr.type); });
+
+const hotbarTabsEl = document.getElementById('hotbar-tabs');
+HOTBAR_TABS.forEach((t) => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'tab' + (t.id === state.hotbarTab ? ' active' : '');
+  btn.dataset.tab = t.id;
+  btn.textContent = t.label;
+  btn.addEventListener('click', () => setHotbarTab(t.id));
+  hotbarTabsEl.appendChild(btn);
 });
+
+function presetsForTab(tabId) {
+  return PRESETS.filter((p) => (p.tab || 'decor') === tabId);
+}
+
+function setHotbarTab(tabId) {
+  state.hotbarTab = tabId;
+  hotbarTabsEl.querySelectorAll('.tab').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === tabId);
+  });
+  rebuildHotbarSlots();
+}
+
+function rebuildHotbarSlots() {
+  hotbar.innerHTML = '';
+  const list = presetsForTab(state.hotbarTab);
+  list.forEach((pr) => {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    slot.dataset.type = pr.type;
+    slot.title = pr.label;
+    const thumb = thumbCache[pr.type] || renderThumb(pr.type);
+    // Clone canvas so each slot owns a copy
+    const c = document.createElement('canvas');
+    c.width = thumb.width; c.height = thumb.height;
+    c.className = 'thumb';
+    c.getContext('2d').drawImage(thumb, 0, 0);
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = pr.label;
+    slot.appendChild(c);
+    slot.appendChild(name);
+    slot.addEventListener('pointerdown', (e) => {
+      if (state.mode !== 'build') return;
+      document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
+      slot.classList.add('selected');
+      state.selectedPreset = pr.type;
+      state.dragType = pr.type;
+      ghost.innerHTML = '';
+      const gImg = document.createElement('img');
+      gImg.src = c.toDataURL('image/png');
+      gImg.style.width = '48px';
+      gImg.style.height = '48px';
+      ghost.appendChild(gImg);
+      ghost.style.display = 'block';
+      ghost.style.left = e.clientX + 'px';
+      ghost.style.top = e.clientY + 'px';
+      dropping = true;
+    });
+    if (state.selectedPreset === pr.type) slot.classList.add('selected');
+    hotbar.appendChild(slot);
+  });
+}
+rebuildHotbarSlots();
 
 window.addEventListener('pointermove', (e) => {
   if (!dropping) return;
@@ -3309,7 +4047,7 @@ function placeAt(type, point) {
       undo: () => { const e = state.objects.find((o) => o.id === entry.id); if (e) removeObject(e); },
       redo: () => createObject(snap.type, snap.props, new THREE.Vector3(...snap.position)),
     });
-    toast(`放置 ${type}`);
+    toast(`放置 ${PRESETS.find((p) => p.type === type)?.label || type}`);
   }
 }
 
@@ -3685,8 +4423,8 @@ function setMode(mode) {
   if (mode !== 'build') deselectAll();
   transform.enabled = mode === 'build';
 
-  const hotbar = document.getElementById('hotbar');
-  if (hotbar) hotbar.style.display = mode === 'build' ? '' : 'none';
+  const wrap = document.getElementById('hotbar-wrap');
+  if (wrap) wrap.style.display = mode === 'build' ? '' : 'none';
 
   if (mode === 'sculpt') {
     showLeftPanel('sculpt');
@@ -4680,6 +5418,7 @@ function enterPlay() {
   deselectAll();
   transform.enabled = false;
   brushCursor.visible = false;
+  clearMobRadiusHelper();
   play.active = true;
   play.flying = false;
   state.mode = 'play';
@@ -4711,13 +5450,14 @@ function enterPlay() {
   setPlayViewMode(play.thirdPerson);
   orbit.enabled = false;
 
-  // Play-mode perf: lower pixel ratio, no shadows, shorter draw distance
+  // Play-mode perf: lower pixel ratio, no shadows (keep far plane past sky dome)
   play._prevPR = renderer.getPixelRatio();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.15));
   renderer.shadowMap.enabled = false;
   sun.castShadow = false;
   terrain.castShadow = false;
-  playCamera.far = 90;
+  // Keep far plane beyond sky dome (r=150) — clipping it made a giant white disc in play
+  playCamera.far = 300;
   playCamera.updateProjectionMatrix();
   state.objects.forEach((o) => {
     o.mesh.traverse((c) => {
@@ -4838,13 +5578,13 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'y' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); redo(); }
   if (e.key === 'Delete' || e.key === 'Backspace') document.getElementById('btn-delete')?.click();
   const num = parseInt(e.key, 10);
-  if (num >= 1 && num <= PRESETS.length) {
-    const slot = hotbar.children[num - 1];
-    if (slot) {
-      document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
-      slot.classList.add('selected');
-      state.selectedPreset = PRESETS[num - 1].type;
-    }
+  const tabPresets = presetsForTab(state.hotbarTab);
+  if (num >= 1 && num <= tabPresets.length) {
+    const pr = tabPresets[num - 1];
+    const slot = hotbar.querySelector(`.slot[data-type="${pr.type}"]`);
+    document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
+    if (slot) slot.classList.add('selected');
+    state.selectedPreset = pr.type;
   }
 });
 window.addEventListener('keyup', (e) => { if (state.mode === 'play') handlePlayKey(e, false); });
@@ -5063,10 +5803,12 @@ function updatePlayPropCull() {
       o.mesh.visible = false;
     }
   });
-  // Water discs: keep nearby only
+  // Water discs: keep nearby only (geometry is at origin — use baked cull center)
   const cullGroup = (grp) => {
     grp.children.forEach((c) => {
-      const dx = c.position.x - px, dz = c.position.z - pz;
+      const cx = c.userData.cullX ?? c.position.x;
+      const cz = c.userData.cullZ ?? c.position.z;
+      const dx = cx - px, dz = cz - pz;
       const d2 = dx * dx + dz * dz;
       c.visible = d2 < far2;
     });
@@ -5096,6 +5838,7 @@ function animate() {
   waveT += dt;
 
   if (!play.active) {
+    updateMobs(dt);
     state.objects.forEach((o) => {
       o.mesh.traverse((c) => {
         if (c.name === 'waterSurf') {
@@ -5115,6 +5858,7 @@ function animate() {
     renderer.render(scene, camera);
   } else {
     updatePlay(dt);
+    updateMobs(dt);
     play._cullTick = (play._cullTick || 0) + 1;
     if ((play._cullTick % 4) === 0) updatePlayPropCull();
     updateFpsHud(dt);
