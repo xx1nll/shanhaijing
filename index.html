@@ -811,12 +811,20 @@ transform.addEventListener('dragging-changed', (e) => {
     syncGroupFromProxy(true);
     groupDragStart = null;
   } else if (!e.value && state.selectedObj) {
-    if (state.snap && transform.mode === 'translate') {
-      state.selectedObj.position.x = Math.round(state.selectedObj.position.x / SNAP) * SNAP;
-      state.selectedObj.position.z = Math.round(state.selectedObj.position.z / SNAP) * SNAP;
+    const obj = state.selectedObj;
+    // Persist gizmo rotate/scale into props so copy/paste & rebuild keep them
+    if (obj.userData.props) obj.userData.props.rotation = obj.rotation.y;
+    const entry = state.objects.find((o) => o.mesh === obj);
+    if (entry) {
+      entry.props.rotation = obj.rotation.y;
+      entry.props = entry.props;
     }
-    if (state.selectedObj.userData?.type === 'water') rebuildCompositeHeightMap();
-    else snapObjectToTerrain(state.selectedObj, { forceGround: true });
+    if (state.snap && transform.mode === 'translate') {
+      obj.position.x = Math.round(obj.position.x / SNAP) * SNAP;
+      obj.position.z = Math.round(obj.position.z / SNAP) * SNAP;
+    }
+    if (obj.userData?.type === 'water') rebuildCompositeHeightMap();
+    else snapObjectToTerrain(obj, { forceGround: true });
   }
 });
 transform.addEventListener('objectChange', () => {
@@ -1549,17 +1557,17 @@ function sampleBasinRimMin(cells, delta, threshold = -0.08) {
   return Number.isFinite(minH) ? minH : 0;
 }
 
-/** Water mesh that only covers dug/footprint cells — C-shaped digs stay C-shaped */
+/** Water mesh covering footprint cells with slight overlap so no grid seams */
 function makeCellWaterMesh(cells, waterY, color) {
   const cellW = WORLD / SEG;
   const positions = [];
   const indices = [];
   let v = 0;
-  const pad = cellW * 0.05;
+  // Overlap neighbors so C-shaped fills stay continuous (no gaps)
+  const h = cellW * 0.5 + cellW * 0.02;
   cells.forEach(([ix, iy]) => {
     const cx = (ix / SEG - 0.5) * WORLD;
     const cz = (iy / SEG - 0.5) * WORLD;
-    const h = cellW * 0.5 - pad;
     positions.push(
       cx - h, waterY, cz - h,
       cx + h, waterY, cz - h,
@@ -1575,9 +1583,10 @@ function makeCellWaterMesh(cells, waterY, color) {
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(
     geo,
-    mat(color, { transparent: true, opacity: 0.72, roughness: 0.2, flatShading: true, side: THREE.DoubleSide })
+    mat(color, { transparent: true, opacity: 0.74, roughness: 0.18, flatShading: true, side: THREE.DoubleSide, depthWrite: false })
   );
   mesh.name = 'waterSurf';
+  mesh.renderOrder = 2;
   mesh.userData.baseY = 0;
   return mesh;
 }
@@ -1655,11 +1664,16 @@ function refreshHoleWater() {
   disposeGroupDeep(holeWaterGroup);
   state.features.filter((f) => f.type === 'hole' && f.props.fillWater).forEach((f) => {
     const p = f.props;
-    const cells = featureFootprintCells(f, 0.88);
-    if (cells.length < 3) return;
     const rimR = Math.max(p.baseWidth || 4, p.baseLength || 4) * 0.5;
     const level = p.waterLevel ?? 0.12;
     const waterY = waterSurfaceY(f.x, f.z, rimR, level);
+    // Prefer cells that sit under the waterline inside the footprint (full dig coverage)
+    let cells = featureFootprintCells(f, 0.98).filter(([ix, iy]) => {
+      const { x, z } = mapIndexToWorld(ix, iy);
+      return sampleHeight(x, z) <= waterY + 0.08;
+    });
+    if (cells.length < 3) cells = featureFootprintCells(f, 0.92);
+    if (cells.length < 3) return;
     const mesh = makeCellWaterMesh(cells, waterY, p.waterColor || '#5a7a72');
     mesh.userData.holeWater = true;
     holeWaterGroup.add(mesh);
@@ -2395,6 +2409,9 @@ function removeObject(entry) {
 
 function rebuildObjectMesh(entry) {
   const pos = entry.mesh.position.clone();
+  const rotY = entry.mesh.rotation.y;
+  const scl = entry.mesh.scale.clone();
+  entry.props.rotation = rotY;
   const was = state.selectedObj === entry.mesh;
   if (was) transform.detach();
   scene.remove(entry.mesh);
@@ -2402,6 +2419,8 @@ function rebuildObjectMesh(entry) {
   const mesh = FACTORIES[entry.type](entry.props);
   mesh.userData = { type: entry.type, props: entry.props, id: entry.id, selectable: true };
   mesh.position.copy(pos);
+  mesh.rotation.y = rotY;
+  mesh.scale.copy(scl);
   scene.add(mesh);
   entry.mesh = mesh;
   if (entry.type === 'water') rebuildCompositeHeightMap();
@@ -3532,6 +3551,10 @@ function refreshGroundLayerList() {
 }
 
 canvas.addEventListener('pointermove', (e) => {
+  if (play.active || state.mode === 'play') {
+    brushCursor.visible = false;
+    return;
+  }
   if (state.mode === 'sculpt') {
     const hit = hitTerrain(e);
     if (hit) {
@@ -3906,10 +3929,16 @@ document.getElementById('brushStr').addEventListener('input', (e) => {
 // Encode / decode
 // ═══════════════════════════════════════════════════════════
 function serializeObject(entry) {
+  const rotY = entry.mesh.rotation.y;
+  // Keep props.rotation in sync with the live mesh (TransformControls may have rotated it)
+  const props = { ...entry.props, rotation: rotY };
+  entry.props.rotation = rotY;
+  if (entry.mesh.userData.props) entry.mesh.userData.props.rotation = rotY;
   return {
-    id: entry.id, type: entry.type, props: { ...entry.props },
+    id: entry.id, type: entry.type, props,
     position: [entry.mesh.position.x, entry.mesh.position.y, entry.mesh.position.z],
     scale: [entry.mesh.scale.x, entry.mesh.scale.y, entry.mesh.scale.z],
+    rotation: rotY,
   };
 }
 
@@ -4038,8 +4067,14 @@ function loadMap(data) {
       if (o.type === 'lantern') o.type = 'firepit';
     }
     if (!FACTORIES[o.type]) return;
-    const entry = createObject(o.type, o.props, new THREE.Vector3(...o.position));
+    const props = { ...o.props };
+    const rotY = o.rotation != null ? o.rotation : (props.rotation || 0);
+    props.rotation = rotY;
+    const entry = createObject(o.type, props, new THREE.Vector3(...o.position));
     entry.id = o.id; entry.mesh.userData.id = o.id;
+    entry.mesh.rotation.y = rotY;
+    entry.props.rotation = rotY;
+    if (entry.mesh.userData.props) entry.mesh.userData.props.rotation = rotY;
     if (o.scale) entry.mesh.scale.set(...o.scale);
     state.nextId = Math.max(state.nextId, o.id + 1);
   });
@@ -4567,6 +4602,7 @@ function findSpawnPoint() {
 function enterPlay() {
   deselectAll();
   transform.enabled = false;
+  brushCursor.visible = false;
   play.active = true;
   play.flying = false;
   state.mode = 'play';
