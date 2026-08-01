@@ -568,7 +568,7 @@
     <div id="panel-list" style="display:none">
       <div class="section">
         <h3>場景清單</h3>
-        <p style="font-size:0.7rem;color:#8a8070;line-height:1.35;margin-bottom:8px">勾選多個項目後按「成組」· 點名稱單選</p>
+        <p style="font-size:0.7rem;color:#8a8070;line-height:1.35;margin-bottom:8px">含山穴、靈物、塑形與路徑 · 點名稱後可用 移/轉/縮 · 勾選後「成組」</p>
         <div id="outliner" class="layer-list"></div>
       </div>
     </div>
@@ -777,7 +777,7 @@ transform.addEventListener('dragging-changed', (e) => {
       scaleZ: featureProxy.scale.z,
     };
   }
-  if (e.value && (selectedSculptId || selectedGroundId)) {
+  if (e.value && (selectedSculptId != null || selectedGroundId != null)) {
     const L = getSelectedPaintLayer();
     if (L) {
       layerDragStart = {
@@ -790,9 +790,9 @@ transform.addEventListener('dragging-changed', (e) => {
         scaleZ: L.scaleZ || 1,
         px: layerProxy.position.x,
         pz: layerProxy.position.z,
-        proxySX: layerProxy.scale.x,
-        proxySY: layerProxy.scale.y,
-        proxySZ: layerProxy.scale.z,
+        proxySX: layerProxy.scale.x || 1,
+        proxySY: layerProxy.scale.y || 1,
+        proxySZ: layerProxy.scale.z || 1,
       };
     }
   }
@@ -803,7 +803,7 @@ transform.addEventListener('dragging-changed', (e) => {
     syncFeatureFromProxy(true);
     featureProxy.scale.set(1, 1, 1);
     featureDragStart = null;
-  } else if (!e.value && (selectedSculptId || selectedGroundId)) {
+  } else if (!e.value && (selectedSculptId != null || selectedGroundId != null)) {
     syncLayerFromProxy(true);
     layerProxy.scale.set(1, 1, 1);
     layerDragStart = null;
@@ -824,12 +824,12 @@ transform.addEventListener('dragging-changed', (e) => {
       obj.position.z = Math.round(obj.position.z / SNAP) * SNAP;
     }
     if (obj.userData?.type === 'water') rebuildCompositeHeightMap();
-    else snapObjectToTerrain(obj, { forceGround: true });
+    else if (state.snap) snapObjectToTerrain(obj); // XZ only — Y stays free until 落地
   }
 });
 transform.addEventListener('objectChange', () => {
   if (state.selectedFeature) syncFeatureFromProxy(false);
-  else if (selectedSculptId || selectedGroundId) syncLayerFromProxy(false);
+  else if (selectedSculptId != null || selectedGroundId != null) syncLayerFromProxy(false);
   else if (selectedGroupId) syncGroupFromProxy(false);
 });
 scene.add(transform.getHelper());
@@ -1411,7 +1411,10 @@ function rebuildCompositeHeightMap() {
   rebuildFeatureTint();
   refreshHoleWater();
   refreshSculptWater();
-  state.objects.forEach((o) => snapObjectToTerrain(o.mesh, { forceGround: true }));
+  // Only re-float water / floaters when terrain changes — never yank props to the floor
+  state.objects.forEach((o) => {
+    if (o.type === 'water' || o.mesh.userData.float) snapObjectToTerrain(o.mesh);
+  });
   updateFeatureProxy();
   updateLayerProxy();
   rebuildGroundTexture();
@@ -1713,10 +1716,18 @@ function refreshSculptWater() {
   disposeGroupDeep(sculptWaterGroup);
   state.sculptLayers.forEach((L) => {
     if (!L.fillWater || L.visible === false || !L.delta) return;
-    const basins = findDigBasins(L.delta);
+    // Materialize rotate/scale so water follows the transformed dig
+    const baked = emptyMap(0);
+    const amp = L.scaleY || 1;
+    for (let iy = 0; iy <= SEG; iy++) {
+      for (let ix = 0; ix <= SEG; ix++) {
+        baked[iy][ix] = sampleLayerAtCell(L, 'delta', ix, iy, amp);
+      }
+    }
+    const basins = findDigBasins(baked);
     const color = L.waterColor || '#4a6a68';
     basins.forEach((b) => {
-      const rimMin = sampleBasinRimMin(b.cells, L.delta);
+      const rimMin = sampleBasinRimMin(b.cells, baked);
       const waterY = rimMin - 0.12;
       const mesh = makeCellWaterMesh(b.cells, waterY, color);
       sculptWaterGroup.add(mesh);
@@ -1857,7 +1868,8 @@ function syncLayerFromProxy(forceRebuild) {
   const rebuild = () => {
     if (selectedSculptId != null) rebuildCompositeHeightMap();
     else rebuildGroundTexture();
-    updateLayerProxy();
+    // Never reset the proxy mid-drag — only after the gesture ends
+    if (forceRebuild) updateLayerProxy();
   };
   if (forceRebuild) rebuild();
   else {
@@ -1868,6 +1880,20 @@ function syncLayerFromProxy(forceRebuild) {
 
 function selectPaintLayer(kind, id) {
   if (state.mode === 'play') return;
+  // Soft-switch out of paint modes so gizmo isn't stolen by brush strokes
+  if (state.mode === 'sculpt' || state.mode === 'ground') {
+    state.mode = 'build';
+    document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'build'));
+    brushCursor.visible = false;
+    const hotbar = document.getElementById('hotbar');
+    if (hotbar) hotbar.style.display = '';
+    document.getElementById('panel-sculpt').style.display = 'none';
+    document.getElementById('panel-ground').style.display = 'none';
+    if (state.showListPanel) showLeftPanel('list');
+    else if (state.showIslandPanel) showLeftPanel('island');
+    else document.getElementById('panel-left').classList.add('hidden');
+    document.getElementById('hint').textContent = '選取清單中的路徑／塑形後可用 移 / 轉 / 縮';
+  }
   deselectAll();
   const L = kind === 'sculpt'
     ? state.sculptLayers.find((x) => x.id === id)
@@ -1886,20 +1912,19 @@ function selectPaintLayer(kind, id) {
   state.multi = [{ kind, id }];
   updateLayerProxy();
   transform.setSpace(state.xformMode === 'scale' ? 'local' : 'world');
+  transform.showX = transform.showY = transform.showZ = true;
+  if (state.xformMode === 'rotate') {
+    transform.showX = false; transform.showZ = false;
+  }
   transform.setMode(state.xformMode === 'scale' ? 'scale' : state.xformMode === 'rotate' ? 'rotate' : 'translate');
   transform.attach(layerProxy);
   transform.enabled = true;
-  // allow gizmos even if current tab is sculpt/ground
   showXformBar();
   const title = kind === 'sculpt' ? (L.label || '塑形圖層') : (L.label || GROUND_LABELS[L.type] || '地表');
   document.getElementById('props-content').innerHTML =
     `<div class="section"><h3>${title}</h3>
      <p style="font-size:0.72rem;color:#8a8070;line-height:1.4">可用 移 / 轉 / 縮 調整此筆畫圖層（縮：X/Z 平面尺寸${kind==='sculpt'?'，Y 高度':''}）</p></div>`;
   document.getElementById('panel-right').classList.remove('hidden');
-  // keep build-like transform UX even if list/sculpt panel open
-  if (state.mode === 'sculpt' || state.mode === 'ground') {
-    /* stay; transform still works */
-  }
   refreshOutliner();
 }
 
@@ -2364,8 +2389,8 @@ function snapObjectToTerrain(obj, opts = {}) {
     obj.position.x = Math.round(obj.position.x / SNAP) * SNAP;
     obj.position.z = Math.round(obj.position.z / SNAP) * SNAP;
   }
-  // Default: sit on terrain. Pass keepY to preserve free vertical placement.
-  if (!opts.keepY) {
+  // Y only when explicitly landing (落地) — never auto-glue to the floor
+  if (opts.forceGround) {
     obj.position.y = sampleHeight(obj.position.x, obj.position.z);
   }
 }
@@ -2380,12 +2405,20 @@ function disposeObject(obj) {
   });
 }
 
-function createObject(type, props, position) {
+function createObject(type, props, position, opts = {}) {
   const p = { ...DEFAULT_PROPS[type], ...props };
   const mesh = FACTORIES[type](p);
   mesh.userData = { type, props: p, id: state.nextId++, selectable: true };
   mesh.position.copy(position);
-  snapObjectToTerrain(mesh);
+  if (opts.preserveY) {
+    // restore from map code — keep free Y; optional XZ grid only
+    snapObjectToTerrain(mesh);
+  } else if (type === 'water' || mesh.userData.float) {
+    snapObjectToTerrain(mesh);
+  } else {
+    // first drop from hotbar: sit on terrain once
+    snapObjectToTerrain(mesh, { forceGround: true });
+  }
   scene.add(mesh);
   const entry = { id: mesh.userData.id, type, mesh, props: p };
   state.objects.push(entry);
@@ -2424,7 +2457,7 @@ function rebuildObjectMesh(entry) {
   scene.add(mesh);
   entry.mesh = mesh;
   if (entry.type === 'water') rebuildCompositeHeightMap();
-  else snapObjectToTerrain(mesh);
+  else snapObjectToTerrain(mesh); // XZ grid only — preserve free Y
   if (was) selectObject(mesh);
 }
 
@@ -2736,7 +2769,9 @@ function syncGroupFromProxy(final) {
       if (o.mesh.userData.props && 'rotation' in o.mesh.userData.props) {
         o.mesh.userData.props.rotation = o.mesh.rotation.y;
       }
-      snapObjectToTerrain(o.mesh, { forceGround: true });
+      // Keep member Y free; only re-float water
+      if (o.type === 'water' || o.mesh.userData.float) snapObjectToTerrain(o.mesh);
+      else if (state.snap) snapObjectToTerrain(o.mesh);
       if (o.type === 'water') needsTerrain = true;
     } else if (s.kind === 'feature') {
       const f = state.features.find((x) => x.id === s.id);
@@ -2860,17 +2895,27 @@ function refreshOutliner() {
     rows.push({ kind: 'group', id: g.id, label: `📦 ${g.label}`, type: g.label, checkable: false });
   });
   state.features.forEach((f) => {
-    rows.push({ kind: 'feature', id: f.id, label: itemLabel('feature', f.type, f.id), type: f.type, checkable: true });
+    const icon = f.type === 'hole' ? '🕳' : '⛰';
+    rows.push({ kind: 'feature', id: f.id, label: `${icon} ${itemLabel('feature', f.type, f.id)}`, type: f.type, checkable: true });
   });
   state.objects.forEach((o) => {
     rows.push({ kind: 'object', id: o.id, label: itemLabel('object', o.type, o.id), type: o.type, checkable: true });
   });
   state.sculptLayers.forEach((L, i) => {
-    rows.push({ kind: 'sculpt', id: L.id, label: `🖌 ${L.label || ('塑形 ' + (i + 1))}`, type: L.label, checkable: false });
+    const mark = L.fillWater ? '💧' : '🖌';
+    rows.push({ kind: 'sculpt', id: L.id, label: `${mark} ${L.label || ('塑形 ' + (i + 1))}`, type: L.label, checkable: false });
   });
   state.groundLayers.forEach((L, i) => {
     rows.push({ kind: 'ground', id: L.id, label: `🛤 ${L.label || GROUND_LABELS[L.type] || L.type}`, type: L.type, checkable: false });
   });
+  // In-progress strokes (rare if flush ran — keep as safety net)
+  if (mapHasContent(state.sessionDelta)) {
+    rows.push({ kind: 'session-sculpt', id: -1, label: '🖌 進行中·塑形（開清單或複製時會自動完成）', type: 'session', checkable: false });
+  }
+  if (mapHasContent(state.sessionGround?.alpha)) {
+    const t = GROUND_LABELS[state.sessionGround.type] || state.sessionGround.type;
+    rows.push({ kind: 'session-ground', id: -2, label: `🛤 進行中·${t}（開清單或複製時會自動完成）`, type: 'session', checkable: false });
+  }
   if (!rows.length) {
     box.innerHTML = '<div class="prop-empty" style="padding:8px 0">尚無物件</div>';
     return;
@@ -2922,6 +2967,10 @@ function refreshOutliner() {
         selectPaintLayer('sculpt', id);
       } else if (kind === 'ground') {
         selectPaintLayer('ground', id);
+      } else if (kind === 'session-sculpt' || kind === 'session-ground') {
+        flushPendingPaintSessions();
+        refreshOutliner();
+        toast('已自動完成筆畫 · 請再點清單中的項目來編輯');
       }
     });
   });
@@ -3360,8 +3409,11 @@ function groundPaintAt(wx, wz) {
   updateGroundPendingUI();
 }
 
-function commitSculptSession() {
-  if (!mapHasContent(state.sessionDelta)) { toast('沒有可完成的塑形'); return; }
+function commitSculptSession(opts = {}) {
+  if (!mapHasContent(state.sessionDelta)) {
+    if (!opts.silent) toast('沒有可完成的塑形');
+    return false;
+  }
   const dug = state.brush.fillWater && mapHasContent(
     state.sessionDelta.map((row) => row.map((h) => (h < -0.05 ? h : 0)))
   );
@@ -3397,7 +3449,8 @@ function commitSculptSession() {
       refreshOutliner();
     },
   });
-  toast(dug ? '塑形完成 · 已注水' : '塑形已完成');
+  if (!opts.silent) toast(dug ? '塑形完成 · 已注水' : '塑形已完成');
+  return true;
 }
 
 function discardSculptSession() {
@@ -3408,8 +3461,11 @@ function discardSculptSession() {
   toast('已捨棄塑形');
 }
 
-function commitGroundSession() {
-  if (!mapHasContent(state.sessionGround?.alpha)) { toast('沒有可完成的地表'); return; }
+function commitGroundSession(opts = {}) {
+  if (!mapHasContent(state.sessionGround?.alpha)) {
+    if (!opts.silent) toast('沒有可完成的地表');
+    return false;
+  }
   const alpha = cloneMap(state.sessionGround.alpha);
   const cen = layerContentCentroid(alpha);
   const layer = {
@@ -3441,7 +3497,15 @@ function commitGroundSession() {
       refreshOutliner();
     },
   });
-  toast('地表已完成');
+  if (!opts.silent) toast('地表已完成');
+  return true;
+}
+
+/** Commit in-progress paint so it shows in 清單 and survives copy/paste */
+function flushPendingPaintSessions() {
+  const a = commitSculptSession({ silent: true });
+  const b = commitGroundSession({ silent: true });
+  return a || b;
 }
 
 function discardGroundSession() {
@@ -3609,6 +3673,11 @@ function showLeftPanel(which) {
 
 function setMode(mode) {
   if (mode === 'code') { openCodeModal(); return; }
+  const prev = state.mode;
+  // Leaving paint modes: commit strokes so they appear in 清單 / map codes
+  if ((prev === 'sculpt' || prev === 'ground') && mode !== prev) {
+    flushPendingPaintSessions();
+  }
   state.mode = mode;
   document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
   brushCursor.visible = false;
@@ -3646,8 +3715,8 @@ function setMode(mode) {
     build: state.multiMode
       ? '多選中：點物件加入選取 · 清單也可勾選 · 再按成組'
       : '拖放到島上 · 開「多選」或清單勾選後「成組」',
-    sculpt: '左鍵抬升 · Shift 下壓 · 可勾「下挖注水」',
-    ground: '畫出路徑後按「完成」 · 黃土 / 泥 / 草',
+    sculpt: '左鍵抬升 · Shift 下壓 · 可勾「下挖注水」· 離開時自動完成',
+    ground: '畫出路徑 · 離開模式或開清單時自動完成，可在清單轉／縮',
   };
   document.getElementById('hint').textContent = hints[mode] || hints.build;
 }
@@ -3672,6 +3741,7 @@ document.getElementById('btn-list').addEventListener('click', () => {
   state.showIslandPanel = false;
   document.getElementById('btn-island').classList.remove('on');
   if (state.showListPanel) {
+    flushPendingPaintSessions();
     if (state.mode === 'sculpt' || state.mode === 'ground') setMode('build');
     showLeftPanel('list');
     refreshOutliner();
@@ -3943,8 +4013,10 @@ function serializeObject(entry) {
 }
 
 function encodeMap() {
+  // Ensure in-progress strokes are committed into layers before serializing
+  flushPendingPaintSessions();
   const payload = {
-    v: 4,
+    v: 5,
     island: { ...state.island },
     sculptLayers: state.sculptLayers.map((L) => ({
       id: L.id,
@@ -4070,12 +4142,16 @@ function loadMap(data) {
     const props = { ...o.props };
     const rotY = o.rotation != null ? o.rotation : (props.rotation || 0);
     props.rotation = rotY;
-    const entry = createObject(o.type, props, new THREE.Vector3(...o.position));
+    const entry = createObject(o.type, props, new THREE.Vector3(...o.position), { preserveY: true });
     entry.id = o.id; entry.mesh.userData.id = o.id;
     entry.mesh.rotation.y = rotY;
     entry.props.rotation = rotY;
     if (entry.mesh.userData.props) entry.mesh.userData.props.rotation = rotY;
     if (o.scale) entry.mesh.scale.set(...o.scale);
+    // Re-apply saved Y after any incidental snaps (water still floats)
+    if (o.type !== 'water' && !entry.mesh.userData.float) {
+      entry.mesh.position.y = o.position[1];
+    }
     state.nextId = Math.max(state.nextId, o.id + 1);
   });
   state.groups = (data.groups || []).map((g) => ({
@@ -4102,6 +4178,7 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
 });
 
 function openCodeModal(prefill = '') {
+  flushPendingPaintSessions();
   document.getElementById('code-input').value = prefill;
   document.getElementById('code-modal').classList.add('open');
 }
