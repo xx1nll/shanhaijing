@@ -1,5 +1,5 @@
 /**
- * 山海島 — trees & flowers (低面數、可調色)
+ * 蓬莱筑境 — trees & flowers (低面數、可調色)
  * Shared helpers keep mesh counts low so many instances stay playable.
  */
 export function installPlants(THREE, { mat, cprop, hash2 }) {

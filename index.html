@@ -3,15 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>山海島 · Shanhai Island</title>
+  <title>蓬莱筑境 · Penglai Realm</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
-  <script src="./supabase-config.js"></script>
   <script type="importmap">
   {
     "imports": {
       "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/",
-      "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
     }
   }
   </script>
@@ -645,7 +643,7 @@
 </head>
 <body>
   <div id="boot-screen" aria-live="polite">
-    <div class="boot-title">山海島</div>
+    <div class="boot-title">蓬莱筑境</div>
     <div class="boot-sub">載入中…</div>
     <div id="boot-bar"><i id="boot-bar-fill"></i></div>
     <div id="boot-pct">0%</div>
@@ -653,7 +651,7 @@
   <canvas id="viewport"></canvas>
 
   <div id="hud-top">
-    <div class="brand">山海島</div>
+    <div class="brand">蓬莱筑境</div>
     <button class="hud-btn edit-only mode-btn active" data-mode="build" title="Build">🏔 建造</button>
     <button class="hud-btn edit-only" id="btn-list" title="Item list">清單</button>
     <button class="hud-btn edit-only" id="btn-multiselect" title="Multi-select mode">多選</button>
@@ -663,8 +661,6 @@
     <button class="hud-btn edit-only" id="btn-undo" title="Undo" disabled>↩</button>
     <button class="hud-btn edit-only" id="btn-redo" title="Redo" disabled>↪</button>
     <button class="hud-btn edit-only" id="btn-copy" title="Copy">📋</button>
-    <button class="hud-btn edit-only" id="btn-cloud-save" title="Save world to Supabase">☁ 存雲</button>
-    <button class="hud-btn edit-only" id="btn-cloud-load" title="Load world from Supabase">☁ 載雲</button>
     <button class="hud-btn" id="btn-gfx" title="Graphics settings">⚙ 畫面</button>
     <button class="hud-btn play" id="btn-play" title="Play">▶ 遊歷</button>
   </div>
@@ -769,17 +765,19 @@
       <p>調整陰影與畫風。遊歷與編輯共用。</p>
       <div class="setting-block">
         <h3>渲染品質</h3>
-        <div class="setting-hint">極簡較順暢；細緻開啟柔和陰影與更高畫質。</div>
+        <div class="setting-hint">極簡最順；正常有柔和陰影；極致為最高畫質（較耗效能）。</div>
         <div class="seg" id="gfx-quality-seg">
           <button type="button" class="hud-btn" data-quality="simple">極簡渲染</button>
-          <button type="button" class="hud-btn" data-quality="detail">細緻渲染</button>
+          <button type="button" class="hud-btn" data-quality="normal">正常渲染</button>
+          <button type="button" class="hud-btn" data-quality="ultra">極致渲染</button>
         </div>
       </div>
       <div class="setting-block">
         <h3>畫風</h3>
-        <div class="setting-hint">山水：淡墨灰調；自然：更接近當代寫實光色。</div>
+        <div class="setting-hint">山水：淡墨灰調；翰墨丹青：傳統礦彩；自然：當代寫實光色。</div>
         <div class="seg" id="gfx-style-seg">
           <button type="button" class="hud-btn" data-style="shanshui">山水淡墨</button>
+          <button type="button" class="hud-btn" data-style="hanmo">翰墨丹青</button>
           <button type="button" class="hud-btn" data-style="natural">自然寫實</button>
         </div>
       </div>
@@ -793,14 +791,13 @@
 
   <script type="module">
 /**
- * 山海島 — fullscreen Minecraft-style editor
+ * 蓬莱筑境 — fullscreen Minecraft-style editor
  * Mountains & holes stamp the heightmap (base size fixed; mountain steepness = rim rockiness).
  * Props lean pre-civilization / 山海經 archaic, not dynastic temples.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { createClient } from '@supabase/supabase-js';
 import { installPlants } from './plants.js';
 import { installStructures } from './structures.js';
 import { installAnimals } from './animals.js';
@@ -814,8 +811,6 @@ const SEA_LEVEL = 0.0;
 const OCEAN_SIZE = 400; // visual sea only (not the heightmap)
 const MAX_STEP = 1.1;
 const SNAP = 0.25;
-const CLOUD_WORLD_ID = (window.SHANHAI_SUPABASE && window.SHANHAI_SUPABASE.worldId) || 'main';
-
 const GROUND_COLORS = {
   road:  { r: 0.72, g: 0.62, b: 0.38 }, // yellowish path
   mud:   { r: 0.42, g: 0.32, b: 0.22 },
@@ -983,15 +978,18 @@ let mobSpeed = () => 1;
 
 /** Graphics prefs — shadows + art style (persisted) */
 const GFX_KEY = 'shanhai-gfx';
+const GFX_QUALITY = new Set(['simple', 'normal', 'ultra']);
 function loadGfxSettings() {
-  let quality = 'detail';
+  let quality = 'normal';
   let style = 'shanshui';
   try {
     const raw = localStorage.getItem(GFX_KEY);
     if (raw) {
       const o = JSON.parse(raw);
-      if (o.quality === 'simple' || o.quality === 'detail') quality = o.quality;
-      if (o.style === 'shanshui' || o.style === 'natural') style = o.style;
+      // Migrate old "detail" (細緻) → normal (正常)
+      if (o.quality === 'detail') quality = 'normal';
+      else if (GFX_QUALITY.has(o.quality)) quality = o.quality;
+      if (o.style === 'shanshui' || o.style === 'hanmo' || o.style === 'natural') style = o.style;
     }
   } catch { /* ignore */ }
   return { quality, style };
@@ -999,6 +997,22 @@ function loadGfxSettings() {
 const gfx = loadGfxSettings();
 function saveGfxSettings() {
   try { localStorage.setItem(GFX_KEY, JSON.stringify({ quality: gfx.quality, style: gfx.style })); } catch { /* ignore */ }
+}
+function gfxShadowsOn() {
+  return gfx.quality === 'normal' || gfx.quality === 'ultra';
+}
+function gfxIsUltra() {
+  return gfx.quality === 'ultra';
+}
+function gfxPixelRatioCap() {
+  if (gfx.quality === 'ultra') return 2;
+  if (gfx.quality === 'normal') return 1.5;
+  return 1.1;
+}
+function gfxQualityLabel() {
+  if (gfx.quality === 'ultra') return '極致渲染';
+  if (gfx.quality === 'normal') return '正常渲染';
+  return '極簡渲染';
 }
 
 const state = {
@@ -3180,11 +3194,13 @@ function selectPaintLayer(kind, id) {
 // Pre-civilization object factories (archaic 山海經)
 // ═══════════════════════════════════════════════════════════
 function mat(color, opts = {}) {
-  const shan = (typeof gfx === 'undefined' || gfx.style !== 'natural');
+  const style = (typeof gfx === 'undefined') ? 'shanshui' : gfx.style;
+  const flat = style === 'shanshui' || style === 'hanmo';
+  const rough = style === 'natural' ? 0.68 : (style === 'hanmo' ? 0.78 : 0.88);
   return new THREE.MeshStandardMaterial({
     color,
-    flatShading: shan,
-    roughness: shan ? 0.88 : 0.68,
+    flatShading: flat,
+    roughness: rough,
     metalness: 0.02,
     ...opts,
   });
@@ -3671,25 +3687,72 @@ const FACTORIES = {
 };
 
 function initMobBrain(mesh, props, home) {
-  const hx = home?.x ?? mesh.position.x;
-  const hz = home?.z ?? mesh.position.z;
+  const p = props || mesh.userData?.props || {};
+  const hx = home?.x ?? (p.originX != null ? +p.originX : mesh.position.x);
+  const hz = home?.z ?? (p.originZ != null ? +p.originZ : mesh.position.z);
   const type = mesh.userData?.type;
   const aerial = isFlyingMob(type) || isSwimMob(type);
   const ground = sampleHeight(hx, hz);
-  const flyH = props?.flyHeight ?? (isSwimMob(type) ? 0.4 : 4);
+  const flyH = p.flyHeight ?? (isSwimMob(type) ? 0.4 : 4);
   const baseY = isSwimMob(type)
     ? Math.max(SEA_LEVEL + 0.15, ground + flyH)
     : (aerial ? ground + flyH : ground);
+  const hy = home?.y ?? (p.originY != null ? +p.originY : (aerial ? baseY : ground));
   mesh.userData.mob = {
     homeX: hx,
     homeZ: hz,
-    homeY: aerial ? (home?.y ?? baseY) : ground,
+    homeY: aerial ? hy : ground,
     tx: hx,
     tz: hz,
-    ty: aerial ? (home?.y ?? baseY) : ground,
+    ty: aerial ? hy : ground,
     wait: 0.4 + Math.random() * 1.2,
     phase: Math.random() * Math.PI * 2,
   };
+  // Keep durable origin on props (save/load / play start)
+  p.originX = hx;
+  p.originZ = hz;
+  if (aerial) p.originY = mesh.userData.mob.homeY;
+  if (mesh.userData.props) {
+    mesh.userData.props.originX = p.originX;
+    mesh.userData.props.originZ = p.originZ;
+    if (aerial) mesh.userData.props.originY = p.originY;
+  }
+}
+
+/** Write wander-home into props so encodeMap persists it. */
+function syncMobOriginToProps(entry) {
+  if (!entry?.mesh || !isMob(entry.type)) return;
+  const m = entry.mesh.userData.mob;
+  if (!m) return;
+  const p = entry.props || (entry.mesh.userData.props = {});
+  p.originX = m.homeX;
+  p.originZ = m.homeZ;
+  if (m.homeY != null) p.originY = m.homeY;
+  if (entry.mesh.userData.props) {
+    entry.mesh.userData.props.originX = p.originX;
+    entry.mesh.userData.props.originZ = p.originZ;
+    if (p.originY != null) entry.mesh.userData.props.originY = p.originY;
+  }
+}
+
+/** Re-apply saved origin → brain (play start / after load). */
+function applyMobOriginFromProps(entry) {
+  if (!entry?.mesh || !isMob(entry.type)) return;
+  const p = entry.props || {};
+  if (p.originX == null || p.originZ == null) {
+    if (!entry.mesh.userData.mob) initMobBrain(entry.mesh, p);
+    syncMobOriginToProps(entry);
+    return;
+  }
+  const home = { x: +p.originX, z: +p.originZ, y: p.originY != null ? +p.originY : undefined };
+  if (!entry.mesh.userData.mob) {
+    initMobBrain(entry.mesh, p, home);
+  } else {
+    const m = entry.mesh.userData.mob;
+    m.homeX = home.x;
+    m.homeZ = home.z;
+    if (home.y != null) m.homeY = home.y;
+  }
 }
 
 function makeMobNameTexture(text) {
@@ -3855,6 +3918,15 @@ function setMobHome(mesh, x, z) {
       : Math.max(mesh.position.y, ground + flyH * 0.5);
     m.homeY = y; m.ty = y;
   }
+  p.originX = m.homeX;
+  p.originZ = m.homeZ;
+  if (m.homeY != null) p.originY = m.homeY;
+  const entry = state.objects.find((o) => o.mesh === mesh);
+  if (entry) {
+    entry.props.originX = p.originX;
+    entry.props.originZ = p.originZ;
+    if (p.originY != null) entry.props.originY = p.originY;
+  }
 }
 
 function ensureMobParts(mesh) {
@@ -3897,6 +3969,7 @@ function updateMobs(dt) {
       m.homeX = mesh.position.x;
       m.homeZ = mesh.position.z;
       if (aerial) m.homeY = mesh.position.y;
+      syncMobOriginToProps(o);
       continue;
     }
 
@@ -3912,6 +3985,7 @@ function updateMobs(dt) {
       } else {
         mesh.position.y = sampleHeight(mesh.position.x, mesh.position.z);
       }
+      syncMobOriginToProps(o);
       m.phase += dt * (aerial ? 6 : 1.6);
       if (aerial) {
         const wingL = parts.wingL;
@@ -4129,13 +4203,29 @@ function createObject(type, props, position, opts = {}) {
     snapObjectToTerrain(mesh, { forceGround: true });
   }
   scene.add(mesh);
-  applyMeshShadows(mesh, gfx.quality === 'detail');
+  applyMeshShadows(mesh, gfxShadowsOn());
   const entry = {
     id: mesh.userData.id, type, mesh, props: p,
     name: allocName(defaultNameFor('object', type), collectTakenNames()),
   };
   state.objects.push(entry);
-  if (isMob(type)) initMobBrain(mesh, p, opts.mobHome);
+  if (isMob(type)) {
+    const home = opts.mobHome || {
+      x: p.originX != null ? +p.originX : mesh.position.x,
+      z: p.originZ != null ? +p.originZ : mesh.position.z,
+      y: p.originY != null ? +p.originY : mesh.position.y,
+    };
+    // Fresh place (no saved origin): anchor wander to drop point
+    if (p.originX == null) {
+      p.originX = mesh.position.x;
+      p.originZ = mesh.position.z;
+      p.originY = mesh.position.y;
+      home.x = p.originX;
+      home.z = p.originZ;
+      home.y = p.originY;
+    }
+    initMobBrain(mesh, p, home);
+  }
   if (type === 'water') rebuildCompositeHeightMap();
   refreshOutliner();
   if (isMob(type)) syncMobNameTag(entry);
@@ -4184,7 +4274,7 @@ function rebuildObjectMesh(entry) {
   mesh.scale.copy(scl);
   syncObjectTransformProps(entry);
   scene.add(mesh);
-  applyMeshShadows(mesh, gfx.quality === 'detail');
+  applyMeshShadows(mesh, gfxShadowsOn());
   entry.mesh = mesh;
   if (isMob(entry.type)) {
     initMobBrain(mesh, entry.props, mobHome || { x: pos.x, z: pos.z, y: pos.y });
@@ -6533,7 +6623,8 @@ function syncIslandSliders() {
 // ═══════════════════════════════════════════════════════════
 function serializeObject(entry) {
   syncObjectTransformProps(entry);
-  // Persist full props bag (cluster, mob showName/stationary/wander/flyHeight, colors, hitbox, …)
+  if (isMob(entry.type)) syncMobOriginToProps(entry);
+  // Persist full props bag (cluster, mob showName/stationary/wander/flyHeight/origin, colors, hitbox, …)
   const props = {
     ...entry.props,
     rotation: entry.mesh.rotation.y,
@@ -6596,7 +6687,7 @@ function encodeMap() {
   // Ensure in-progress strokes are committed into layers before serializing
   flushPendingPaintSessions();
   const payload = {
-    // v7: animals / plants / structures / cluster + mob name props in objects[].props
+    // v7: animals / plants / structures / cluster + mob name + origin props
     v: 7,
     world: { width: WORLD, height: WORLD, seg: SEG },
     island: { ...state.island },
@@ -6822,13 +6913,9 @@ function loadMap(data) {
     if (o.type !== 'water' && !entry.mesh.userData.float) {
       entry.mesh.position.y = o.position[1];
     }
-    // Nametag must rebuild after saved name / showName are applied
+    // Nametag + wander origin after saved name / props are applied
     if (isMob(entry.type)) {
-      initMobBrain(entry.mesh, entry.props, {
-        x: entry.mesh.position.x,
-        z: entry.mesh.position.z,
-        y: entry.mesh.position.y,
-      });
+      applyMobOriginFromProps(entry);
       syncMobNameTag(entry);
     }
     state.nextId = Math.max(state.nextId, o.id + 1);
@@ -6859,109 +6946,6 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
     toast('請手動複製');
   }
 });
-
-// ═══════════════════════════════════════════════════════════
-// Supabase cloud world (single 1000×1000 world: CLOUD_WORLD_ID)
-// ═══════════════════════════════════════════════════════════
-const _sbCfg = window.SHANHAI_SUPABASE || {};
-let supabase = null;
-function getSupabase() {
-  if (supabase) return supabase;
-  const url = (_sbCfg.url || '').trim();
-  const key = (_sbCfg.anonKey || '').trim();
-  if (!url || !key) return null;
-  supabase = createClient(url, key);
-  return supabase;
-}
-
-async function ensureCloudWorld() {
-  const sb = getSupabase();
-  if (!sb) return false;
-  const { data, error } = await sb
-    .from('worlds')
-    .select('id')
-    .eq('id', CLOUD_WORLD_ID)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) {
-    const { error: insErr } = await sb.from('worlds').insert({
-      id: CLOUD_WORLD_ID,
-      name: '山海主世界',
-      width: WORLD,
-      height: WORLD,
-      map_code: null,
-    });
-    if (insErr) throw insErr;
-  }
-  return true;
-}
-
-async function saveWorldToCloud() {
-  const sb = getSupabase();
-  if (!sb) {
-    toast('請先在 supabase-config.js 填入 URL 與 anon key');
-    return;
-  }
-  const btn = document.getElementById('btn-cloud-save');
-  if (btn) btn.disabled = true;
-  try {
-    toast('正在存到雲端…');
-    await ensureCloudWorld();
-    const map_code = encodeMap();
-    const { error } = await sb.from('worlds').upsert({
-      id: CLOUD_WORLD_ID,
-      name: '山海主世界',
-      width: WORLD,
-      height: WORLD,
-      map_code,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
-    if (error) throw error;
-    toast('已存雲 · 山海主世界');
-  } catch (err) {
-    console.error(err);
-    toast('存雲失敗: ' + (err.message || err));
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function loadWorldFromCloud() {
-  const sb = getSupabase();
-  if (!sb) {
-    toast('請先在 supabase-config.js 填入 URL 與 anon key');
-    return;
-  }
-  const btn = document.getElementById('btn-cloud-load');
-  if (btn) btn.disabled = true;
-  try {
-    toast('正在從雲端載入…');
-    await ensureCloudWorld();
-    const { data, error } = await sb
-      .from('worlds')
-      .select('map_code, width, height, updated_at')
-      .eq('id', CLOUD_WORLD_ID)
-      .single();
-    if (error) throw error;
-    if (!data?.map_code) {
-      toast('雲端世界尚無存檔 · 先按「存雲」');
-      return;
-    }
-    loadMap(decodeMap(data.map_code));
-    toast('已載雲 · 山海主世界');
-  } catch (err) {
-    console.error(err);
-    toast('載雲失敗: ' + (err.message || err));
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-document.getElementById('btn-cloud-save').addEventListener('click', () => { saveWorldToCloud(); });
-document.getElementById('btn-cloud-load').addEventListener('click', () => { loadWorldFromCloud(); });
-
-// Ensure the 1000×1000 cloud world row exists when credentials are present
-ensureCloudWorld().catch((err) => console.warn('cloud world ensure:', err));
 
 function openCodeModal(prefill = '') {
   flushPendingPaintSessions();
@@ -7005,14 +6989,20 @@ function applyMeshShadows(root, on) {
   });
 }
 
-function applyObjectMaterialStyle() {
-  const shan = gfx.style !== 'natural';
-  const flat = shan;
-  const rough = shan ? 0.88 : 0.68;
+function applyObjectMaterialStyle(opts = {}) {
+  const style = gfx.style;
+  const ultra = !!opts.ultra || gfxIsUltra();
+  const flat = (style === 'shanshui' || style === 'hanmo') && !(ultra && style === 'hanmo');
+  const rough = style === 'natural'
+    ? (ultra ? 0.58 : 0.68)
+    : style === 'hanmo'
+      ? (ultra ? 0.7 : 0.78)
+      : (ultra ? 0.82 : 0.88);
   const tweak = (m) => {
     if (!m || m.roughness == null) return;
     m.flatShading = flat;
     m.roughness = rough;
+    if (ultra && m.metalness != null) m.metalness = Math.min(0.08, (m.metalness || 0) + 0.02);
     m.needsUpdate = true;
   };
   const walk = (root) => {
@@ -7029,15 +7019,19 @@ function applyObjectMaterialStyle() {
   walk(sculptWaterGroup);
 }
 
-/** Apply 極簡/細緻 shadows + 山水/自然 lighting & materials */
+/** Apply 極簡 / 正常 / 極致 shadows + 山水/自然 lighting & materials */
 function applyGraphicsSettings(opts = {}) {
-  const detail = gfx.quality === 'detail';
-  const shan = gfx.style !== 'natural';
+  const shadows = gfxShadowsOn();
+  const ultra = gfxIsUltra();
   const rebuild = opts.rebuildTerrain !== false;
 
-  renderer.shadowMap.enabled = detail;
-  sun.castShadow = detail;
-  const mapSize = detail ? (play.active ? 1536 : 2048) : 512;
+  renderer.shadowMap.enabled = shadows;
+  renderer.shadowMap.type = ultra ? THREE.PCFSoftShadowMap : THREE.PCFSoftShadowMap;
+  sun.castShadow = shadows;
+  // Peak: 4K shadow map; normal: 2K; simple: tiny unused map
+  const mapSize = !shadows ? 512
+    : ultra ? (play.active ? 3072 : 4096)
+      : (play.active ? 1536 : 2048);
   if (sun.shadow.mapSize.x !== mapSize) {
     sun.shadow.mapSize.set(mapSize, mapSize);
     if (sun.shadow.map) {
@@ -7045,68 +7039,128 @@ function applyGraphicsSettings(opts = {}) {
       sun.shadow.map = null;
     }
   }
-  terrain.castShadow = detail;
-  terrain.receiveShadow = detail;
-  ocean.receiveShadow = detail;
-  state.objects.forEach((o) => applyMeshShadows(o.mesh, detail));
-  applyMeshShadows(play.character, detail);
+  sun.shadow.bias = ultra ? -0.00025 : -0.0004;
+  sun.shadow.normalBias = ultra ? 0.028 : 0.04;
+  sun.shadow.radius = ultra ? 2.2 : 3.2;
+  const extent = ultra ? 72 : 58;
+  Object.assign(sun.shadow.camera, {
+    near: ultra ? 1.5 : 2,
+    far: ultra ? 180 : 150,
+    left: -extent, right: extent, top: extent, bottom: -extent,
+  });
+  sun.shadow.camera.updateProjectionMatrix();
+
+  terrain.castShadow = shadows;
+  terrain.receiveShadow = shadows;
+  ocean.receiveShadow = shadows;
+  state.objects.forEach((o) => applyMeshShadows(o.mesh, shadows));
+  applyMeshShadows(play.character, shadows);
   [holeWaterGroup, sculptWaterGroup].forEach((grp) => {
     grp?.traverse((c) => {
       if (!c.isMesh) return;
       c.castShadow = false;
-      c.receiveShadow = detail;
+      c.receiveShadow = shadows;
     });
   });
 
-  if (shan) {
+  // Pixel density
+  const prCap = play.active
+    ? (ultra ? 1.85 : gfx.quality === 'normal' ? 1.5 : 1.1)
+    : gfxPixelRatioCap();
+  renderer.setPixelRatio(Math.min(devicePixelRatio, prCap));
+
+  // Fog / draw feel
+  if (ultra) {
+    scene.fog.near = gfx.style === 'natural' ? 55 : 48;
+    scene.fog.far = gfx.style === 'natural' ? 165 : 150;
+  } else if (shadows) {
+    scene.fog.near = 40;
+    scene.fog.far = 120;
+  } else {
+    scene.fog.near = 35;
+    scene.fog.far = 105;
+  }
+
+  const style = gfx.style;
+  if (style === 'hanmo') {
+    // 翰墨丹青 — mineral pigments: 花青 / 石绿 / 赭石 / 朱砂 warmth
+    hemiLight.color.setHex(0xf0e0c8);
+    hemiLight.groundColor.setHex(0x5a4030);
+    hemiLight.intensity = ultra ? 0.78 : 0.7;
+    sun.color.setHex(0xffe0b0); // warm 赭 / silk lamp
+    sun.intensity = ultra ? 1.48 : 1.32;
+    sun.position.set(ultra ? 36 : 34, ultra ? 60 : 54, ultra ? 30 : 26);
+    fill.color.setHex(0x6890b8); // 花青 fill
+    fill.intensity = ultra ? 0.48 : 0.4;
+    ambientLight.color.setHex(0xb09070);
+    ambientLight.intensity = ultra ? 0.28 : 0.24;
+    scene.background.setHex(0xc8b898);
+    scene.fog.color.setHex(0xc8b898);
+    if (skyMat) {
+      skyMat.uniforms.topColor.value.setHex(0x6a8ab0); // 花青天
+      skyMat.uniforms.midColor.value.setHex(0xd8c8a0); // 绢白云际
+      skyMat.uniforms.botColor.value.setHex(0xb89868); // 赭石远山
+    }
+    renderer.toneMappingExposure = ultra ? 1.16 : 1.1;
+    terrainMat.roughness = ultra ? 0.84 : 0.88;
+    ocean.material.color.setHex(0x3a6a78); // deep 花青水
+    ocean.material.roughness = ultra ? 0.45 : 0.55;
+    terrainPalette.desat = 0; // keep mineral chroma
+  } else if (style === 'shanshui') {
     hemiLight.color.setHex(0xd8d0bc);
     hemiLight.groundColor.setHex(0x3e443c);
-    hemiLight.intensity = 0.62;
+    hemiLight.intensity = ultra ? 0.7 : 0.62;
     sun.color.setHex(0xfff0d8);
-    sun.intensity = 1.2;
-    sun.position.set(38, 58, 26);
+    sun.intensity = ultra ? 1.38 : 1.2;
+    sun.position.set(ultra ? 40 : 38, ultra ? 64 : 58, ultra ? 28 : 26);
     fill.color.setHex(0xb4bcc4);
-    fill.intensity = 0.32;
+    fill.intensity = ultra ? 0.4 : 0.32;
     ambientLight.color.setHex(0x8a8680);
-    ambientLight.intensity = 0.22;
+    ambientLight.intensity = ultra ? 0.26 : 0.22;
+    scene.background.setHex(0xa8a498);
+    scene.fog.color.setHex(0xa8a498);
     if (skyMat) {
       skyMat.uniforms.topColor.value.setHex(0xc8c0a8);
       skyMat.uniforms.midColor.value.setHex(0xa8a498);
       skyMat.uniforms.botColor.value.setHex(0x888880);
     }
-    renderer.toneMappingExposure = 1.02;
-    terrainMat.roughness = 0.93;
+    renderer.toneMappingExposure = ultra ? 1.08 : 1.02;
+    terrainMat.roughness = ultra ? 0.9 : 0.93;
     ocean.material.color.setHex(0x5a7a72);
-    ocean.material.roughness = 0.62;
-    terrainPalette.desat = 0.08;
+    ocean.material.roughness = ultra ? 0.52 : 0.62;
+    terrainPalette.desat = ultra ? 0.05 : 0.08;
   } else {
     hemiLight.color.setHex(0xc5dff5);
     hemiLight.groundColor.setHex(0x4a6040);
-    hemiLight.intensity = 0.78;
+    hemiLight.intensity = ultra ? 0.88 : 0.78;
     sun.color.setHex(0xfff6e8);
-    sun.intensity = 1.5;
-    sun.position.set(42, 62, 18);
+    sun.intensity = ultra ? 1.72 : 1.5;
+    sun.position.set(ultra ? 44 : 42, ultra ? 68 : 62, ultra ? 20 : 18);
     fill.color.setHex(0x7aa0c8);
-    fill.intensity = 0.42;
+    fill.intensity = ultra ? 0.5 : 0.42;
     ambientLight.color.setHex(0x90a090);
-    ambientLight.intensity = 0.16;
+    ambientLight.intensity = ultra ? 0.2 : 0.16;
+    scene.background.setHex(0x9ec4e0);
+    scene.fog.color.setHex(0x9ec4e0);
     if (skyMat) {
       skyMat.uniforms.topColor.value.setHex(0x6aa8d8);
       skyMat.uniforms.midColor.value.setHex(0x9ec4e0);
       skyMat.uniforms.botColor.value.setHex(0xa8b090);
     }
-    renderer.toneMappingExposure = 1.18;
-    terrainMat.roughness = 0.78;
+    renderer.toneMappingExposure = ultra ? 1.26 : 1.18;
+    terrainMat.roughness = ultra ? 0.72 : 0.78;
     ocean.material.color.setHex(0x3a8a82);
-    ocean.material.roughness = 0.42;
+    ocean.material.roughness = ultra ? 0.34 : 0.42;
     terrainPalette.desat = 0;
   }
 
+  applyObjectMaterialStyle({ ultra });
+
   scene.traverse((o) => {
-    if (o.name === 'farRidge') o.visible = shan;
+    // Classical landscape ridge for ink & mineral styles
+    if (o.name === 'farRidge') o.visible = style !== 'natural';
   });
 
-  applyObjectMaterialStyle();
   if (rebuild) bakeTerrainVertexColors();
   syncGfxModalUI();
 }
@@ -7140,9 +7194,15 @@ document.getElementById('gfx-quality-seg')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-quality]');
   if (!btn) return;
   gfx.quality = btn.dataset.quality;
+  if (!GFX_QUALITY.has(gfx.quality)) gfx.quality = 'normal';
   saveGfxSettings();
   applyGraphicsSettings({ rebuildTerrain: false });
-  toast(gfx.quality === 'detail' ? '細緻渲染 · 陰影開啟' : '極簡渲染 · 陰影關閉');
+  const qToast = {
+    simple: '極簡渲染 · 陰影關閉',
+    normal: '正常渲染 · 柔和陰影',
+    ultra: '極致渲染 · 最高畫質',
+  };
+  toast(qToast[gfx.quality] || gfxQualityLabel());
 });
 document.getElementById('gfx-style-seg')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-style]');
@@ -7150,7 +7210,8 @@ document.getElementById('gfx-style-seg')?.addEventListener('click', (e) => {
   gfx.style = btn.dataset.style;
   saveGfxSettings();
   applyGraphicsSettings({ rebuildTerrain: true });
-  toast(gfx.style === 'shanshui' ? '山水淡墨' : '自然寫實');
+  const styleToast = { shanshui: '山水淡墨', hanmo: '翰墨丹青', natural: '自然寫實' };
+  toast(styleToast[gfx.style] || '畫風已切換');
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -7180,9 +7241,10 @@ const play = {
 const playCamera = new THREE.PerspectiveCamera(75, 1, 0.08, 300);
 
 function matPlay(color, opts = {}) {
-  const shan = gfx.style !== 'natural';
+  const flat = gfx.style === 'shanshui' || gfx.style === 'hanmo';
+  const rough = gfx.style === 'natural' ? 0.68 : (gfx.style === 'hanmo' ? 0.78 : 0.88);
   return new THREE.MeshStandardMaterial({
-    color, flatShading: shan, roughness: shan ? 0.88 : 0.68, metalness: 0.02, ...opts,
+    color, flatShading: flat, roughness: rough, metalness: 0.02, ...opts,
   });
 }
 
@@ -7406,7 +7468,7 @@ function createPlayCharacter() {
 
 play.parts = createPlayCharacter();
 play.character = play.parts.root;
-applyMeshShadows(play.character, gfx.quality === 'detail');
+applyMeshShadows(play.character, gfxShadowsOn());
 
 function setPlayFov(v) {
   play.fov = Math.max(40, Math.min(110, +v));
@@ -7667,6 +7729,10 @@ function enterPlay() {
   clearMobRadiusHelper();
   play.active = true;
   play.flying = false;
+  // Wander radius stays centered on saved origin, not wherever the mob was mid-path
+  state.objects.forEach((o) => {
+    if (isMob(o.type)) applyMobOriginFromProps(o);
+  });
   state.mode = 'play';
   document.body.classList.add('playing');
   document.getElementById('play-ui').classList.add('active');
@@ -7705,7 +7771,6 @@ function enterPlay() {
 
   // Play-mode: slightly lower pixel ratio; shadows follow 畫面設定
   play._prevPR = renderer.getPixelRatio();
-  renderer.setPixelRatio(Math.min(devicePixelRatio, gfx.quality === 'detail' ? 1.5 : 1.1));
   applyGraphicsSettings({ rebuildTerrain: false });
   // Keep far plane beyond sky dome (r=150) — clipping it made a giant white disc in play
   playCamera.far = 300;

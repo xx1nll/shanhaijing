@@ -1,5 +1,5 @@
 /**
- * 山海島 — 建築 & 神異景物（低面數）
+ * 蓬莱筑境 — 建築 & 神異景物（低面數）
  *
  * Scale convention: props.scale === 1 is the natural / life-size in world units
  * (player ≈ 0.75 tall ≈ 3 blocks; 1 block = 0.25).

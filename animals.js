@@ -1,5 +1,5 @@
 /**
- * 山海島 — beasts, birds, aquatic & creepy-crawlies (低面數)
+ * 蓬莱筑境 — beasts, birds, aquatic & creepy-crawlies (低面數)
  * Parametric makers keep draw calls low while silhouettes stay distinct.
  */
 export function installAnimals(THREE, { mat, cprop, hash2 }) {
