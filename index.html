@@ -6533,20 +6533,23 @@ function syncIslandSliders() {
 // ═══════════════════════════════════════════════════════════
 function serializeObject(entry) {
   syncObjectTransformProps(entry);
-  const m = entry.mesh;
+  // Persist full props bag (cluster, mob showName/stationary/wander/flyHeight, colors, hitbox, …)
   const props = {
     ...entry.props,
-    rotation: m.rotation.y,
-    rotationX: m.rotation.x,
-    rotationZ: m.rotation.z,
+    rotation: entry.mesh.rotation.y,
+    rotationX: entry.mesh.rotation.x,
+    rotationZ: entry.mesh.rotation.z,
   };
   return {
-    id: entry.id, type: entry.type, name: entry.name || defaultNameFor('object', entry.type), props,
+    id: entry.id,
+    type: entry.type,
+    name: entry.name || defaultNameFor('object', entry.type),
+    props,
     locked: !!entry.locked,
-    position: [m.position.x, m.position.y, m.position.z],
-    scale: [m.scale.x, m.scale.y, m.scale.z],
+    position: [entry.mesh.position.x, entry.mesh.position.y, entry.mesh.position.z],
+    scale: [entry.mesh.scale.x, entry.mesh.scale.y, entry.mesh.scale.z],
     // Full euler — old maps may still have a single Y number
-    rotation: [m.rotation.x, m.rotation.y, m.rotation.z],
+    rotation: [entry.mesh.rotation.x, entry.mesh.rotation.y, entry.mesh.rotation.z],
   };
 }
 
@@ -6593,7 +6596,8 @@ function encodeMap() {
   // Ensure in-progress strokes are committed into layers before serializing
   flushPendingPaintSessions();
   const payload = {
-    v: 6,
+    // v7: animals / plants / structures / cluster + mob name props in objects[].props
+    v: 7,
     world: { width: WORLD, height: WORLD, seg: SEG },
     island: { ...state.island },
     sculptLayers: state.sculptLayers.map((L) => ({
@@ -6778,24 +6782,36 @@ function loadMap(data) {
   if (!data.height || data.features) rebuildCompositeHeightMap();
   state.nextId = data.nextId || 1;
   state.features.forEach((f) => { state.nextId = Math.max(state.nextId, f.id + 1); });
+  let skippedObjects = 0;
   (data.objects || []).forEach((o) => {
-    if (o.type === 'mountain' || o.type === 'hole' || o.type === 'pavilion' || o.type === 'lantern') {
-      if (o.type === 'mountain' || o.type === 'hole') {
-        state.features.push({
-          id: o.id, type: o.type,
-          props: { ...DEFAULT_PROPS[o.type], ...o.props, baseWidth: o.props.baseWidth || o.props.width || 20, baseLength: o.props.baseLength || o.props.width || 20 },
-          x: o.position[0], z: o.position[2],
-        });
-        return;
-      }
-      if (o.type === 'pavilion') o.type = 'shrine';
-      if (o.type === 'lantern') o.type = 'firepit';
+    // Legacy: mountain/hole used to live in objects[] — move to features
+    if (o.type === 'mountain' || o.type === 'hole') {
+      if (!DEFAULT_PROPS[o.type]) return;
+      state.features.push({
+        id: o.id, type: o.type,
+        props: {
+          ...DEFAULT_PROPS[o.type],
+          ...o.props,
+          baseWidth: o.props?.baseWidth || o.props?.width || 20,
+          baseLength: o.props?.baseLength || o.props?.width || 20,
+        },
+        x: o.position[0], z: o.position[2],
+        name: o.name || defaultNameFor('feature', o.type),
+        locked: !!o.locked,
+      });
+      return;
     }
+    // Very old single-word lantern prop (not 燈 lantern_pole structure)
+    if (o.type === 'lantern') o.type = 'firepit';
+
     PLANTS.migratePlantType(o);
     ANIMALS.migrateMobType(o);
-    if (!FACTORIES[o.type]) return;
-    const props = { ...o.props };
-    // Seed Y from legacy single rotation so factories that read props.rotation look right
+    if (!FACTORIES[o.type]) {
+      skippedObjects += 1;
+      return;
+    }
+    // Merge defaults so new fields (clusterCount, showName, …) appear on old saves
+    const props = { ...DEFAULT_PROPS[o.type], ...o.props };
     if (Array.isArray(o.rotation) && o.rotation.length >= 3) props.rotation = o.rotation[1];
     else if (typeof o.rotation === 'number') props.rotation = o.rotation;
     const entry = createObject(o.type, props, new THREE.Vector3(...o.position), { preserveY: true });
@@ -6803,9 +6819,17 @@ function loadMap(data) {
     if (o.name) entry.name = o.name;
     if (o.locked) entry.locked = true;
     applySavedObjectTransform(entry, o);
-    // Re-apply saved Y after any incidental snaps (water still floats)
     if (o.type !== 'water' && !entry.mesh.userData.float) {
       entry.mesh.position.y = o.position[1];
+    }
+    // Nametag must rebuild after saved name / showName are applied
+    if (isMob(entry.type)) {
+      initMobBrain(entry.mesh, entry.props, {
+        x: entry.mesh.position.x,
+        z: entry.mesh.position.z,
+        y: entry.mesh.position.y,
+      });
+      syncMobNameTag(entry);
     }
     state.nextId = Math.max(state.nextId, o.id + 1);
   });
@@ -6820,6 +6844,9 @@ function loadMap(data) {
   refreshGroundLayerList();
   refreshOutliner();
   history.undo.length = 0; history.redo.length = 0; updateUndoButtons();
+  if (skippedObjects > 0) {
+    toast(`載入完成 · 略過 ${skippedObjects} 個未知物件`);
+  }
 }
 
 document.getElementById('btn-copy').addEventListener('click', async () => {
