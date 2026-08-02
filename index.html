@@ -40,6 +40,36 @@
       user-select: none;
     }
 
+    /* —— Boot loading —— */
+    #boot-screen {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px;
+      background: radial-gradient(ellipse at 50% 40%, #2a2820 0%, #0e0d0b 70%);
+      color: var(--pale);
+      transition: opacity 0.45s ease, visibility 0.45s;
+    }
+    #boot-screen.hide { opacity: 0; visibility: hidden; pointer-events: none; }
+    #boot-screen .boot-title {
+      font-family: var(--font-display);
+      font-size: clamp(1.6rem, 4vw, 2.4rem);
+      letter-spacing: 0.18em;
+      color: #e8dcc0;
+      text-shadow: 0 2px 12px #000;
+    }
+    #boot-screen .boot-sub { font-size: 0.78rem; color: #8a8070; letter-spacing: 0.12em; }
+    #boot-bar {
+      width: min(280px, 60vw); height: 6px; border-radius: 4px;
+      background: rgba(255,255,255,0.08); overflow: hidden;
+      border: 1px solid rgba(201,168,76,0.35);
+    }
+    #boot-bar > i {
+      display: block; height: 100%; width: 0%;
+      background: linear-gradient(90deg, #8a7040, #c9a84c);
+      transition: width 0.2s ease;
+    }
+    #boot-pct { font-size: 0.7rem; color: #a89880; font-variant-numeric: tabular-nums; }
+
     /* —— Fullscreen game canvas (Minecraft-style) —— */
     #viewport {
       position: fixed;
@@ -223,12 +253,13 @@
       transform: translateY(-2px);
     }
     .slot canvas.thumb {
-      width: 44px; height: 44px;
-      flex: 0 0 44px;
+      width: 50px; height: 50px;
+      flex: 0 0 50px;
       display: block;
       pointer-events: none;
-      border-radius: 4px;
+      border-radius: 3px;
       background: #3a3832;
+      object-fit: cover;
     }
     .slot .name {
       flex: 0 0 auto;
@@ -613,6 +644,12 @@
   </style>
 </head>
 <body>
+  <div id="boot-screen" aria-live="polite">
+    <div class="boot-title">山海島</div>
+    <div class="boot-sub">載入中…</div>
+    <div id="boot-bar"><i id="boot-bar-fill"></i></div>
+    <div id="boot-pct">0%</div>
+  </div>
   <canvas id="viewport"></canvas>
 
   <div id="hud-top">
@@ -3687,12 +3724,44 @@ function removeMobNameTag(mesh) {
   tag.material?.dispose();
 }
 
-/** Local Y just above the animal's head (mob meshes bake scale into geometry). */
-function mobNameTagHeadY(type, scale) {
-  return mobHeadY(type, scale);
+/** Local Y just above the animal's head — measured from mesh bounds (not a guess). */
+const _nameBox = new THREE.Box3();
+const _nameTop = new THREE.Vector3();
+function mobNameTagHeadY(entry) {
+  const mesh = entry.mesh;
+  const scale = entry.props?.scale ?? 1;
+  if (mesh.userData._ntagY != null && mesh.userData._ntagScale === scale) {
+    return mesh.userData._ntagY;
+  }
+  mesh.updateWorldMatrix(true, true);
+  _nameBox.makeEmpty();
+  mesh.traverse((c) => {
+    if (!c.isMesh || c.isSprite) return;
+    if (c.name === 'mobNameTag') return;
+    if (!c.geometry) return;
+    if (!c.geometry.boundingBox) c.geometry.computeBoundingBox();
+    const bb = c.geometry.boundingBox.clone();
+    bb.applyMatrix4(c.matrixWorld);
+    _nameBox.union(bb);
+  });
+  let y;
+  if (_nameBox.isEmpty()) {
+    y = mobHeadY(entry.type, scale);
+  } else {
+    _nameTop.set(
+      (_nameBox.min.x + _nameBox.max.x) * 0.5,
+      _nameBox.max.y,
+      (_nameBox.min.z + _nameBox.max.z) * 0.5
+    );
+    mesh.worldToLocal(_nameTop);
+    y = _nameTop.y + 0.04;
+  }
+  mesh.userData._ntagY = y;
+  mesh.userData._ntagScale = scale;
+  return y;
 }
 
-const MOB_NAME_SHOW_DIST = 3;
+const MOB_NAME_SHOW_DIST = 20;
 const _mobNameWorld = new THREE.Vector3();
 const _mobNameDir = new THREE.Vector3();
 const _mobNameRay = new THREE.Raycaster();
@@ -3731,12 +3800,12 @@ function syncMobNameTag(entry) {
   tag.material.depthTest = true;
   tag.material.depthWrite = false;
   // Compact plate, parked just above the skull (scale is baked into mesh verts)
-  tag.position.set(0, mobNameTagHeadY(entry.type, p.scale), 0);
+  tag.position.set(0, mobNameTagHeadY(entry), 0);
   tag.scale.set(0.72, 0.18, 1);
   updateMobNameTagVisibility(entry);
 }
 
-/** Play: only within 3m + not occluded by terrain. Editor: always if enabled. */
+/** Play: only within 20m + not occluded by terrain. Editor: always if enabled. */
 function updateMobNameTagVisibility(entry) {
   const mesh = entry?.mesh;
   if (!mesh) return;
@@ -3788,6 +3857,24 @@ function setMobHome(mesh, x, z) {
   }
 }
 
+function ensureMobParts(mesh) {
+  let parts = mesh.userData._parts;
+  if (parts) return parts;
+  parts = {
+    wingL: mesh.getObjectByName('wingL'),
+    wingR: mesh.getObjectByName('wingR'),
+    armL: mesh.getObjectByName('armL'),
+    armR: mesh.getObjectByName('armR'),
+    legL: mesh.getObjectByName('legL'),
+    legR: mesh.getObjectByName('legR'),
+    legLF: mesh.getObjectByName('legLF'),
+    legRF: mesh.getObjectByName('legRF'),
+    tail: mesh.getObjectByName('tail'),
+  };
+  mesh.userData._parts = parts;
+  return parts;
+}
+
 function updateMobs(dt) {
   for (const o of state.objects) {
     if (!isMob(o.type)) continue;
@@ -3797,6 +3884,7 @@ function updateMobs(dt) {
     if (p.stationary == null) p.stationary = false;
     if (!mesh.userData.mob) initMobBrain(mesh, p);
     const m = mesh.userData.mob;
+    const parts = ensureMobParts(mesh);
     const flying = isFlyingMob(o.type);
     const swimming = isSwimMob(o.type);
     const aerial = flying || swimming;
@@ -3826,12 +3914,12 @@ function updateMobs(dt) {
       }
       m.phase += dt * (aerial ? 6 : 1.6);
       if (aerial) {
-        const wingL = mesh.getObjectByName('wingL');
-        const wingR = mesh.getObjectByName('wingR');
+        const wingL = parts.wingL;
+        const wingR = parts.wingR;
         const flap = Math.sin(m.phase) * (flying ? 0.28 : 0.18);
         if (wingL) wingL.rotation.z = -0.15 + flap;
         if (wingR) wingR.rotation.z = 0.15 - flap;
-        const tail = mesh.getObjectByName('tail');
+        const tail = parts.tail;
         if (tail && swimming) tail.rotation.y = Math.sin(m.phase) * 0.2;
         mesh.position.y = (m.homeY ?? mesh.position.y) + Math.sin(m.phase * 0.5) * 0.06;
       }
@@ -3846,22 +3934,22 @@ function updateMobs(dt) {
       m.wait -= dt;
       m.phase += dt * (aerial ? 8 : 2.2);
       if (aerial) {
-        const wingL = mesh.getObjectByName('wingL');
-        const wingR = mesh.getObjectByName('wingR');
+        const wingL = parts.wingL;
+        const wingR = parts.wingR;
         const flap = Math.sin(m.phase) * (flying ? 0.45 : 0.25);
         if (wingL) wingL.rotation.z = -0.2 + flap;
         if (wingR) wingR.rotation.z = 0.2 - flap;
         const ground = sampleHeight(mesh.position.x, mesh.position.z);
         const base = m.homeY ?? (swimming ? Math.max(SEA_LEVEL + 0.15, ground + flyH) : ground + flyH);
         mesh.position.y = base + Math.sin(m.phase * 0.6) * (swimming ? 0.06 : 0.12);
-        const tail = mesh.getObjectByName('tail');
+        const tail = parts.tail;
         if (tail && swimming) tail.rotation.y = Math.sin(m.phase * 1.2) * 0.25;
       } else {
-        const armL = mesh.getObjectByName('armL');
-        const armR = mesh.getObjectByName('armR');
+        const armL = parts.armL;
+        const armR = parts.armR;
         if (armL) armL.rotation.x = Math.sin(m.phase) * 0.08;
         if (armR) armR.rotation.x = Math.sin(m.phase + 1) * 0.08;
-        const tail = mesh.getObjectByName('tail');
+        const tail = parts.tail;
         if (tail) tail.rotation.y = Math.sin(m.phase * 0.8) * 0.15;
       }
       continue;
@@ -3916,28 +4004,28 @@ function updateMobs(dt) {
     }
     m.phase += dt * (aerial ? 14 : 10);
     if (aerial) {
-      const wingL = mesh.getObjectByName('wingL');
-      const wingR = mesh.getObjectByName('wingR');
+      const wingL = parts.wingL;
+      const wingR = parts.wingR;
       const flap = Math.sin(m.phase) * (flying ? 0.55 : 0.3);
       if (wingL) wingL.rotation.z = -0.25 + flap;
       if (wingR) wingR.rotation.z = 0.25 - flap;
-      const tail = mesh.getObjectByName('tail');
+      const tail = parts.tail;
       if (tail) tail.rotation.y = Math.sin(m.phase * 0.5) * 0.12;
     } else {
       const swing = Math.sin(m.phase) * 0.35;
-      const armL = mesh.getObjectByName('armL');
-      const armR = mesh.getObjectByName('armR');
-      const legL = mesh.getObjectByName('legL');
-      const legR = mesh.getObjectByName('legR');
-      const legLF = mesh.getObjectByName('legLF');
-      const legRF = mesh.getObjectByName('legRF');
+      const armL = parts.armL;
+      const armR = parts.armR;
+      const legL = parts.legL;
+      const legR = parts.legR;
+      const legLF = parts.legLF;
+      const legRF = parts.legRF;
       if (armL) armL.rotation.x = swing;
       if (armR) armR.rotation.x = -swing;
       if (legL) legL.rotation.x = -swing * 0.55;
       if (legR) legR.rotation.x = swing * 0.55;
       if (legLF) legLF.rotation.x = swing * 0.5;
       if (legRF) legRF.rotation.x = -swing * 0.5;
-      const tail = mesh.getObjectByName('tail');
+      const tail = parts.tail;
       if (tail) tail.rotation.y = Math.sin(m.phase * 0.7) * 0.25;
     }
   }
@@ -4082,6 +4170,8 @@ function rebuildObjectMesh(entry) {
   disposeObject(entry.mesh);
   const mesh = FACTORIES[entry.type](entry.props);
   stampObjectUserData(mesh, { type: entry.type, props: entry.props, id: entry.id, selectable: true });
+  mesh.userData._ntagY = null;
+  mesh.userData._parts = null;
   mesh.position.copy(pos);
   mesh.rotation.set(
     rot.x,
@@ -5338,18 +5428,20 @@ function beginHotbarDrag(type, clientX, clientY) {
 /** Offscreen renderer for hotbar icons — actual 3D look of each preset */
 /** Offscreen renderer for hotbar icons — actual 3D look of each preset */
 const thumbRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
-thumbRenderer.setSize(96, 96, false);
+thumbRenderer.setSize(128, 128, false);
 thumbRenderer.setPixelRatio(1);
 thumbRenderer.outputColorSpace = THREE.SRGBColorSpace;
 thumbRenderer.toneMapping = THREE.NoToneMapping;
 thumbRenderer.setClearColor(0x4a4840, 1);
 const thumbScene = new THREE.Scene();
-thumbScene.add(new THREE.AmbientLight(0xffffff, 1.2));
-const thumbSun = new THREE.DirectionalLight(0xffffff, 1.1);
+thumbScene.add(new THREE.AmbientLight(0xffffff, 1.25));
+const thumbSun = new THREE.DirectionalLight(0xffffff, 1.15);
 thumbSun.position.set(3, 5, 4);
 thumbScene.add(thumbSun);
-const thumbCam = new THREE.PerspectiveCamera(45, 1, 0.05, 100);
+const thumbCam = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
 const _thumbLam = (hex) => new THREE.MeshLambertMaterial({ color: hex, flatShading: true });
+const _thumbSize = new THREE.Vector3();
+const _thumbCenter = new THREE.Vector3();
 
 function makeTerrainThumbMesh(type) {
   const g = new THREE.Group();
@@ -5401,24 +5493,44 @@ function makeTerrainThumbMesh(type) {
   return g;
 }
 
+function disposeThumbMesh(root) {
+  root.traverse?.((o) => {
+    // Never dispose shared plant leaf geo/mats — thumbs clone visuals only
+    if (o.geometry && !o.geometry.userData?.shared) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => { if (m && !m.userData?.shared) m.dispose(); });
+    }
+  });
+}
+
 function renderThumb(type) {
   for (let i = thumbScene.children.length - 1; i >= 0; i--) {
     const c = thumbScene.children[i];
     if (c.isLight) continue;
     thumbScene.remove(c);
-    c.traverse?.((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
+    disposeThumbMesh(c);
   }
 
   let mesh;
   if (type === 'mountain' || type === 'hole' || type === 'island' || type === 'sculpt' || type === 'path') {
     mesh = makeTerrainThumbMesh(type);
   } else if (FACTORIES[type]) {
-    // Build real prefab, then convert materials to Lambert for reliable thumb lighting
     mesh = FACTORIES[type]({ ...DEFAULT_PROPS[type] });
     mesh.traverse((o) => {
       if (!o.isMesh) return;
       const col = o.material?.color ? o.material.color.getHex() : 0x888888;
-      o.material = _thumbLam(col);
+      // Replace with thumb-only material; keep shared flag off so dispose is safe
+      if (o.material && !o.material.userData?.shared) {
+        // original unique mat — dispose after swap
+        const old = o.material;
+        o.material = _thumbLam(col);
+        old.dispose?.();
+      } else {
+        o.material = _thumbLam(col);
+      }
+      o.castShadow = false;
+      o.receiveShadow = false;
     });
   } else {
     mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), _thumbLam(0x888888));
@@ -5427,29 +5539,39 @@ function renderThumb(type) {
   mesh.updateMatrixWorld(true);
 
   const box = new THREE.Box3().setFromObject(mesh);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const maxDim = Math.max(size.x || 1, size.y || 1, size.z || 1, 0.8);
-  const dist = maxDim * 2.5;
-  thumbCam.position.set(center.x + dist * 0.65, center.y + dist * 0.5, center.z + dist * 0.8);
-  thumbCam.lookAt(center);
+  box.getSize(_thumbSize);
+  box.getCenter(_thumbCenter);
+  const maxDim = Math.max(_thumbSize.x, _thumbSize.y, _thumbSize.z, 0.15);
+  // Fill the slot: tight FOV framing with slight padding
+  const fov = thumbCam.fov * (Math.PI / 180);
+  const dist = (maxDim * 0.5) / Math.tan(fov * 0.5) * 1.02;
+  const elev = Math.max(_thumbSize.y * 0.15, maxDim * 0.12);
+  thumbCam.position.set(
+    _thumbCenter.x + dist * 0.72,
+    _thumbCenter.y + elev + dist * 0.22,
+    _thumbCenter.z + dist * 0.72
+  );
+  thumbCam.near = Math.max(0.01, dist * 0.02);
+  thumbCam.far = dist * 10;
+  thumbCam.lookAt(_thumbCenter);
   thumbCam.updateProjectionMatrix();
   thumbRenderer.render(thumbScene, thumbCam);
 
   const c = document.createElement('canvas');
-  c.width = 96; c.height = 96;
+  c.width = 128; c.height = 128;
   c.className = 'thumb';
-  const img = new Image();
-  // Synchronous path: drawImage from WebGL canvas directly
-  c.getContext('2d').drawImage(thumbRenderer.domElement, 0, 0, 96, 96);
+  c.getContext('2d').drawImage(thumbRenderer.domElement, 0, 0, 128, 128);
 
   thumbScene.remove(mesh);
-  mesh.traverse?.((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
+  disposeThumbMesh(mesh);
   return c;
 }
 
 const thumbCache = {};
-PRESETS.forEach((pr) => { thumbCache[pr.type] = renderThumb(pr.type); });
+function ensureThumb(type) {
+  if (!thumbCache[type]) thumbCache[type] = renderThumb(type);
+  return thumbCache[type];
+}
 
 const hotbarTabsEl = document.getElementById('hotbar-tabs');
 HOTBAR_TABS.forEach((t) => {
@@ -5484,7 +5606,7 @@ function rebuildHotbarSlots() {
     slot.title = pr.paint
       ? (pr.paint === 'sculpt' ? '塑形筆 · 點選後在島上拖曳' : '地表路 · 點選後在島上繪路')
       : pr.label;
-    const thumb = thumbCache[pr.type] || renderThumb(pr.type);
+    const thumb = ensureThumb(pr.type);
     // Clone canvas so each slot owns a copy
     const c = document.createElement('canvas');
     c.width = thumb.width; c.height = thumb.height;
@@ -5539,7 +5661,7 @@ function rebuildHotbarSlots() {
   requestAnimationFrame(syncHotbarRailSize);
 }
 window.addEventListener('resize', () => requestAnimationFrame(syncHotbarRailSize));
-rebuildHotbarSlots();
+// thumbs + slots filled during bootEditor()
 
 function renderPaintToolProps(kind) {
   const el = document.getElementById('props-content');
@@ -8052,26 +8174,50 @@ function updateFpsHud(dt) {
   }
 }
 
+function setBootProgress(pct, label) {
+  const fill = document.getElementById('boot-bar-fill');
+  const pctEl = document.getElementById('boot-pct');
+  const sub = document.querySelector('#boot-screen .boot-sub');
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+  if (sub && label) sub.textContent = label;
+}
+
+function hideBootScreen() {
+  const el = document.getElementById('boot-screen');
+  if (!el) return;
+  el.classList.add('hide');
+  setTimeout(() => el.remove(), 500);
+}
+
+let _plantAnimTick = 0;
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   waveT += dt;
   ocean.position.y = SEA_LEVEL + Math.sin(waveT * 1.4) * 0.04;
+  _plantAnimTick++;
 
   if (!play.active) {
     updateMobs(dt);
-    updatePlantAnims(state.objects, waveT);
-    // Only water / firepit need per-frame mesh tweaks (never walk every plant leaf)
+    // Skip plant sway every other frame when the island is dense
+    if ((_plantAnimTick & 1) === 0 || state.objects.length < 40) {
+      updatePlantAnims(state.objects, waveT);
+    }
     for (const o of state.objects) {
       if (o.type === 'water') {
-        const c = o.mesh?.getObjectByName?.('waterSurf');
+        const c = o.mesh?.userData?._waterSurf || o.mesh?.getObjectByName?.('waterSurf');
         if (c) {
+          o.mesh.userData._waterSurf = c;
           c.userData.baseY ??= c.position.y;
           c.position.y = c.userData.baseY + Math.sin(waveT * 2 + o.id) * 0.03;
         }
       } else if (o.type === 'firepit') {
-        const c = o.mesh?.getObjectByName?.('flame');
-        if (c) c.scale.y = 0.85 + Math.sin(waveT * 8 + o.id) * 0.15;
+        const c = o.mesh?.userData?._flame || o.mesh?.getObjectByName?.('flame');
+        if (c) {
+          o.mesh.userData._flame = c;
+          c.scale.y = 0.85 + Math.sin(waveT * 8 + o.id) * 0.15;
+        }
       }
     }
     holeWaterGroup.children.forEach((c, i) => {
@@ -8083,27 +8229,73 @@ function animate() {
   } else {
     updatePlay(dt);
     updateMobs(dt);
-    updatePlantAnims(state.objects, waveT);
+    if ((_plantAnimTick & 1) === 0 || state.objects.length < 40) {
+      updatePlantAnims(state.objects, waveT);
+    }
     play._cullTick = (play._cullTick || 0) + 1;
     if ((play._cullTick % 4) === 0) updatePlayPropCull();
     updateFpsHud(dt);
     renderer.render(scene, playCamera);
   }
 }
-animate();
 
-// Starter — one placeable island + a few archaic props
-createFeature('island', { texture: 'default' }, 0, 0);
-createObject('松', {}, new THREE.Vector3(2, 0, 1.5));
-createObject('竹', {}, new THREE.Vector3(3.2, 0, 0.4));
-createObject('菊', {}, new THREE.Vector3(1.2, 0, 2.0));
-createObject('rock', { roughness: 0.7 }, new THREE.Vector3(-1.8, 0, 1.2));
-createObject('shrine', { style: 'cairn' }, new THREE.Vector3(0, 0, -1.2));
-createObject('firepit', {}, new THREE.Vector3(0.9, 0, 0.2));
-history.undo.length = 0;
-updateUndoButtons();
-applyGraphicsSettings({ rebuildTerrain: true });
-toast('地形欄可加島 · 選島調材質與顏色');
+function warmThumbsForTab(tabId) {
+  const list = presetsForTab(tabId);
+  let i = 0;
+  return new Promise((resolve) => {
+    function step() {
+      const batch = 4;
+      for (let n = 0; n < batch && i < list.length; n++, i++) {
+        ensureThumb(list[i].type);
+      }
+      const base = 55;
+      const span = 35;
+      setBootProgress(base + (i / Math.max(1, list.length)) * span, '繪製圖示…');
+      if (i < list.length) requestAnimationFrame(step);
+      else resolve();
+    }
+    step();
+  });
+}
+
+async function bootEditor() {
+  setBootProgress(8, '準備場景…');
+  await new Promise((r) => requestAnimationFrame(r));
+  setBootProgress(25, '升起島嶼…');
+  createFeature('island', { texture: 'default' }, 0, 0);
+  createObject('松', {}, new THREE.Vector3(2, 0, 1.5));
+  createObject('竹', {}, new THREE.Vector3(3.2, 0, 0.4));
+  createObject('菊', {}, new THREE.Vector3(1.2, 0, 2.0));
+  createObject('rock', { roughness: 0.7 }, new THREE.Vector3(-1.8, 0, 1.2));
+  createObject('shrine', { style: 'cairn' }, new THREE.Vector3(0, 0, -1.2));
+  createObject('firepit', {}, new THREE.Vector3(0.9, 0, 0.2));
+  history.undo.length = 0;
+  updateUndoButtons();
+  setBootProgress(45, '畫面設定…');
+  applyGraphicsSettings({ rebuildTerrain: true });
+  setBootProgress(55, '繪製圖示…');
+  await warmThumbsForTab(state.hotbarTab);
+  rebuildHotbarSlots();
+  setBootProgress(96, '就緒');
+  await new Promise((r) => requestAnimationFrame(r));
+  hideBootScreen();
+  animate();
+  toast('地形欄可加島 · 選島調材質與顏色');
+  // Warm remaining hotbar thumbs in the background (avoids first-tab hitch later)
+  (async () => {
+    for (const tab of HOTBAR_TABS) {
+      if (tab.id === state.hotbarTab) continue;
+      const list = presetsForTab(tab.id);
+      for (const pr of list) {
+        if (thumbCache[pr.type]) continue;
+        ensureThumb(pr.type);
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+    }
+  })();
+}
+
+bootEditor();
   </script>
 </body>
 </html>

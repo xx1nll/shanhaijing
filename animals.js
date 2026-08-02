@@ -98,14 +98,18 @@ export function installAnimals(THREE, { mat, cprop, hash2 }) {
     // pattern accents (stripes / spots — few cards)
     if (cfg.marks) {
       const markCol = cfg.markColor || dark;
-      for (let i = 0; i < cfg.marks; i++) {
-        const a = (i / cfg.marks) * H;
+      const n = Math.min(cfg.marks, 6);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * H;
         const mark = new THREE.Mesh(
           new THREE.PlaneGeometry((cfg.markW ?? 0.04) * sc, (cfg.markH ?? 0.12) * sc),
           mat(markCol, { side: THREE.DoubleSide })
         );
         mark.position.set(Math.cos(a) * br * 0.95 * sc, by * sc, Math.sin(a) * bl * 0.3 * sc);
         mark.rotation.y = a + Math.PI / 2;
+        mark.castShadow = false;
+        mark.receiveShadow = false;
+        mark.name = 'leafCard'; // skip shadow pass like foliage cards
         g.add(mark);
       }
     }
@@ -171,6 +175,8 @@ export function installAnimals(THREE, { mat, cprop, hash2 }) {
       wing.rotation.y = s * 0.2;
       wing.rotation.z = s * 0.15;
       wing.name = s < 0 ? 'wingL' : 'wingR';
+      wing.castShadow = false;
+      wing.receiveShadow = false;
       g.add(wing);
     }
     // tail
@@ -265,6 +271,8 @@ export function installAnimals(THREE, { mat, cprop, hash2 }) {
       wing.position.set(s * 0.08 * sc, 0.1 * sc, 0.02 * sc);
       wing.rotation.z = s * 0.5;
       wing.name = s < 0 ? 'wingL' : 'wingR';
+      wing.castShadow = false;
+      wing.receiveShadow = false;
       g.add(wing);
     }
     if (cfg.humanFace) {
