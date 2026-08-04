@@ -660,6 +660,7 @@
     <button class="hud-btn edit-only" data-mode="code" id="btn-code" title="Code">📜</button>
     <button class="hud-btn edit-only" id="btn-undo" title="Undo" disabled>↩</button>
     <button class="hud-btn edit-only" id="btn-redo" title="Redo" disabled>↪</button>
+    <button class="hud-btn edit-only" id="btn-focus" title="Focus camera on selection">◎ 聚焦</button>
     <button class="hud-btn edit-only" id="btn-copy" title="Copy">📋</button>
     <button class="hud-btn" id="btn-gfx" title="Graphics settings">⚙ 畫面</button>
     <button class="hud-btn play" id="btn-play" title="Play">▶ 遊歷</button>
@@ -706,9 +707,6 @@
   <aside class="drawer hidden" id="panel-right">
     <h2>物性</h2>
     <div id="xform-bar" class="xform-bar hidden">
-      <button type="button" class="xf active" data-xform="translate" title="Translate">✥ 移</button>
-      <button type="button" class="xf" data-xform="rotate" title="Rotate">↻ 轉</button>
-      <button type="button" class="xf" data-xform="scale" title="Scale">⛶ 縮</button>
       <button type="button" class="xf" data-xform="ground" title="Ground">⬇ 落地</button>
       <button type="button" class="xf" data-xform="lock" title="Lock">🔒 鎖</button>
       <button type="button" class="xf danger" data-xform="delete" title="Delete">🗑</button>
@@ -765,7 +763,7 @@
       <p>調整陰影與畫風。遊歷與編輯共用。</p>
       <div class="setting-block">
         <h3>渲染品質</h3>
-        <div class="setting-hint">極簡最順；正常有柔和陰影；極致為最高畫質（較耗效能）。</div>
+        <div class="setting-hint">極簡最順（無陰影、無動畫）；正常有柔和陰影；極致為最高畫質（較耗效能）。</div>
         <div class="seg" id="gfx-quality-seg">
           <button type="button" class="hud-btn" data-quality="simple">極簡渲染</button>
           <button type="button" class="hud-btn" data-quality="normal">正常渲染</button>
@@ -797,7 +795,7 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { UnifiedTransformControls } from './unified-gizmo.js';
 import { installPlants } from './plants.js';
 import { installStructures } from './structures.js';
 import { installAnimals } from './animals.js';
@@ -891,25 +889,28 @@ function bindNameField(root, onCommit) {
 }
 
 const HOTBAR_TABS = [
+  { id: 'sculpt',  label: '手動塑形' },
   { id: 'terrain', label: '地形' },
   { id: 'trees',   label: '木' },
   { id: 'flowers', label: '草花' },
-  { id: 'decor',   label: '景物' },
-  { id: 'build',   label: '建築' },
-  { id: 'myth',    label: '神異' },
   { id: 'beasts',  label: '獸' },
   { id: 'birds',   label: '禽' },
   { id: 'aqua',    label: '水族' },
   { id: 'crawl',   label: '爬蟲' },
+  { id: 'decor',   label: '景物' },
+  { id: 'build',   label: '建築' },
+  { id: 'myth',    label: '神異' },
 ];
 
 const PRESETS = [
   { type: 'island',   icon: '🏝️', label: '島',  terrain: true,  tab: 'terrain' },
   { type: 'mountain', icon: '⛰',  label: '山',  terrain: true,  tab: 'terrain' },
   { type: 'hole',     icon: '🕳',  label: '穴',  terrain: true,  tab: 'terrain' },
-  { type: 'sculpt',   icon: '🖌',  label: '塑',  paint: 'sculpt', tab: 'terrain' },
   { type: 'path',     icon: '🛤',  label: '路',  paint: 'ground', tab: 'terrain' },
   { type: 'water',    icon: '💧',  label: '澤',  terrain: false, tab: 'terrain' },
+  { type: 'sculpt_mountain', icon: '⛰', label: '塑山',   paint: 'sculpt', sculptMode: 'mountain',    tab: 'sculpt' },
+  { type: 'sculpt_hole',     icon: '🕳', label: '塑穴',   paint: 'sculpt', sculptMode: 'hole',        tab: 'sculpt' },
+  { type: 'sculpt_water',    icon: '💧', label: '塑水穴', paint: 'sculpt', sculptMode: 'water_hole', tab: 'sculpt' },
   { type: 'rock',     icon: '🪨',  label: '石',  terrain: false, tab: 'decor' },
   { type: 'shrine',   icon: '🗿',  label: '祭',  terrain: false, tab: 'decor' },
   { type: 'totem',    icon: '🦴',  label: '圖騰', terrain: false, tab: 'decor' },
@@ -981,7 +982,7 @@ const GFX_KEY = 'shanhai-gfx';
 const GFX_QUALITY = new Set(['simple', 'normal', 'ultra']);
 function loadGfxSettings() {
   let quality = 'normal';
-  let style = 'shanshui';
+  let style = 'hanmo';
   try {
     const raw = localStorage.getItem(GFX_KEY);
     if (raw) {
@@ -1003,6 +1004,10 @@ function gfxShadowsOn() {
 }
 function gfxIsUltra() {
   return gfx.quality === 'ultra';
+}
+/** Ambient world motion (plants, water, fire, mob wander) — off in 極簡 */
+function gfxAnimsOn() {
+  return gfx.quality !== 'simple';
 }
 function gfxPixelRatioCap() {
   if (gfx.quality === 'ultra') return 2;
@@ -1030,7 +1035,7 @@ const state = {
     colorLow: '#7e8a6e', colorMid: '#5e6a54', colorHigh: '#b8b0a0', colorSand: '#a89878',
   },
   brush: {
-    size: 0.5, strength: 0.22, fillWater: false, waterColor: '#4a6a68',
+    size: 5, strength: 0.22, fillWater: false, waterColor: '#4a6a68',
     // Same gradient bands as DEFAULT_PROPS.mountain
     tintEnabled: true,
     colorLow: '#5a8a4a', colorMid: '#3d6b35', colorHigh: '#8aaa68',
@@ -1039,6 +1044,7 @@ const state = {
   baseMap: null,
   sculptLayers: [],          // committed layers only
   sessionDelta: null,        // accumulating sculpt until 完成
+  sculptMode: 'mountain',    // mountain | hole | water_hole
   groundLayers: [],          // committed ground paint layers
   sessionGround: null,       // { type, color?, alpha[][] } until 完成
   heightMap: null,
@@ -1049,20 +1055,43 @@ const state = {
   hotbarTab: 'terrain',
   nextId: 1,
   showListPanel: false,
-  xformMode: 'translate',
+  xformMode: 'translate', // legacy; gizmo shows move+rotate+scale together
 };
 
 const history = { undo: [], redo: [], max: 40 };
+/** In-progress sculpt strokes (before 完成) — Cmd+Z steps through these first */
+let sessionSculptUndo = [];
+
 function pushCmd(cmd) {
   history.undo.push(cmd);
   if (history.undo.length > history.max) history.undo.shift();
   history.redo.length = 0;
   updateUndoButtons();
 }
-function undo() { const c = history.undo.pop(); if (!c) return; c.undo(); history.redo.push(c); updateUndoButtons(); }
+function undoSessionSculpt() {
+  if (!sessionSculptUndo.length) return false;
+  sessionSculptUndo.pop();
+  if (sessionSculptUndo.length) {
+    state.sessionDelta = cloneMap(sessionSculptUndo[sessionSculptUndo.length - 1]);
+  } else {
+    state.sessionDelta = null;
+  }
+  rebuildCompositeHeightMap();
+  updateSculptPendingUI();
+  if (state.mode === 'sculpt') renderPaintToolProps('sculpt');
+  return true;
+}
+function undo() {
+  if (undoSessionSculpt()) { updateUndoButtons(); return; }
+  const c = history.undo.pop();
+  if (!c) return;
+  c.undo();
+  history.redo.push(c);
+  updateUndoButtons();
+}
 function redo() { const c = history.redo.pop(); if (!c) return; c.redo(); history.undo.push(c); updateUndoButtons(); }
 function updateUndoButtons() {
-  document.getElementById('btn-undo').disabled = !history.undo.length;
+  document.getElementById('btn-undo').disabled = !history.undo.length && !sessionSculptUndo.length;
   document.getElementById('btn-redo').disabled = !history.redo.length;
 }
 
@@ -1097,13 +1126,291 @@ orbit.minDistance = 4;
 orbit.maxDistance = 110;
 orbit.target.set(0, 0.5, 0);
 
-const transform = new TransformControls(camera, canvas);
-transform.setMode('translate');
+const transform = new UnifiedTransformControls(camera, canvas);
 transform.setSpace('world');
 transform.setSize(0.9);
+transform.getGroundY = (x, z) => {
+  const obj = state.selectedObj || freeBodyDrag?.mesh;
+  if (typeof terrainAnchorY === 'function') return terrainAnchorY(obj, x, z);
+  return typeof sampleHeight === 'function' ? sampleHeight(x, z) : 0;
+};
 let transformDragging = false;
+/** While translating an object horizontally: preserve height above terrain */
+let objTerrainDrag = null;
 let buildSelectPointer = null;
 let buildSelectSuppress = false;
+/** Candidate / active XZ drag on an unselected object (never features / island) */
+let freeBodyDrag = null;
+const _freePlane = new THREE.Plane();
+const _freeHit = new THREE.Vector3();
+const _freeBox = new THREE.Box3();
+const _freeSize = new THREE.Vector3();
+const _freeCenter = new THREE.Vector3();
+/** In-editor object clipboard for Ctrl+C / V / D */
+let objectClipboard = null;
+/** Snapshot of selection transform at gizmo drag-start (for undo) */
+let xformUndoSnap = null;
+
+function hitXZPlaneAt(e, planeY) {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  _freePlane.set(new THREE.Vector3(0, 1, 0), -planeY);
+  if (!raycaster.ray.intersectPlane(_freePlane, _freeHit)) return null;
+  return _freeHit;
+}
+
+/** World AABB center + half-extents (plants: sway cleared for a stable box). */
+function measureObjectWorldAABB(mesh) {
+  if (!mesh) return null;
+  resetPlantPose(mesh);
+  mesh.updateMatrixWorld(true);
+  _freeBox.setFromObject(mesh);
+  if (_freeBox.isEmpty()) {
+    return { center: mesh.position.clone(), half: { x: 0.4, y: 0.4, z: 0.4 } };
+  }
+  _freeBox.getCenter(_freeCenter);
+  _freeBox.getSize(_freeSize);
+  return {
+    center: _freeCenter.clone(),
+    half: {
+      x: Math.max(_freeSize.x * 0.5, 0.05),
+      y: Math.max(_freeSize.y * 0.5, 0.05),
+      z: Math.max(_freeSize.z * 0.5, 0.05),
+    },
+  };
+}
+
+function ensureFreeDragGhost(fd) {
+  if (fd?.ghostRoot) return fd.ghostRoot;
+  const root = new THREE.Group();
+  root.name = 'freeDragGhost';
+  const dash = (color, opacity) => new THREE.LineDashedMaterial({
+    color, dashSize: 0.18, gapSize: 0.12,
+    depthTest: false, depthWrite: false, transparent: true, opacity, toneMapped: false,
+  });
+  const ground = new THREE.LineSegments(new THREE.BufferGeometry(), dash(0xf2f2f2, 0.5));
+  const boxes = new THREE.LineSegments(new THREE.BufferGeometry(), dash(0xf2f2f2, 0.85));
+  ground.frustumCulled = false;
+  boxes.frustumCulled = false;
+  ground.renderOrder = 2982;
+  boxes.renderOrder = 2983;
+  root.add(ground, boxes);
+  root.userData.ground = ground;
+  root.userData.boxes = boxes;
+  scene.add(root);
+  return root;
+}
+
+function pushAabbEdgesFlat(pos, x0, y0, z0, x1, y1, z1) {
+  const c = [
+    [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1],
+    [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1],
+  ];
+  for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) {
+    pos.push(c[i][0], c[i][1], c[i][2], c[j][0], c[j][1], c[j][2]);
+  }
+}
+
+function updateFreeDragGhost(fd) {
+  if (!fd?.startAABB) return;
+  const root = ensureFreeDragGhost(fd);
+  fd.ghostRoot = root;
+  const a = fd.startAABB.center;
+  const ah = fd.startAABB.half;
+  const cur = measureObjectWorldAABB(fd.mesh);
+  if (!cur) return;
+  const b = cur.center;
+  const bh = cur.half;
+
+  const pts = [];
+  for (const cx of [a.x - ah.x, a.x + ah.x]) {
+    for (const cz of [a.z - ah.z, a.z + ah.z]) pts.push({ x: cx, z: cz });
+  }
+  for (const cx of [b.x - bh.x, b.x + bh.x]) {
+    for (const cz of [b.z - bh.z, b.z + bh.z]) pts.push({ x: cx, z: cz });
+  }
+  let bestI = 0; let bestJ = 1; let bestD = -1;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const dx = pts[i].x - pts[j].x;
+      const dz = pts[i].z - pts[j].z;
+      const dd = dx * dx + dz * dz;
+      if (dd > bestD) { bestD = dd; bestI = i; bestJ = j; }
+    }
+  }
+  const p0 = pts[bestI]; const p1 = pts[bestJ];
+  let x0 = Math.min(p0.x, p1.x); let x1 = Math.max(p0.x, p1.x);
+  let z0 = Math.min(p0.z, p1.z); let z1 = Math.max(p0.z, p1.z);
+  const gx = (x0 + x1) * 0.5; const gz = (z0 + z1) * 0.5;
+  const yG = sampleHeight(gx, gz);
+  const gPos = [];
+  const gc = [[x0, yG, z0], [x1, yG, z0], [x1, yG, z1], [x0, yG, z1]];
+  for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 0]]) {
+    gPos.push(gc[i][0], gc[i][1], gc[i][2], gc[j][0], gc[j][1], gc[j][2]);
+  }
+  const ground = root.userData.ground;
+  ground.geometry.setAttribute('position', new THREE.Float32BufferAttribute(gPos, 3));
+  ground.geometry.computeBoundingSphere();
+  ground.computeLineDistances();
+  ground.visible = true;
+
+  const boxPos = [];
+  pushAabbEdgesFlat(boxPos, a.x - ah.x, a.y - ah.y, a.z - ah.z, a.x + ah.x, a.y + ah.y, a.z + ah.z);
+  pushAabbEdgesFlat(boxPos, b.x - bh.x, b.y - bh.y, b.z - bh.z, b.x + bh.x, b.y + bh.y, b.z + bh.z);
+  const boxes = root.userData.boxes;
+  boxes.geometry.setAttribute('position', new THREE.Float32BufferAttribute(boxPos, 3));
+  boxes.geometry.computeBoundingSphere();
+  boxes.computeLineDistances();
+  boxes.visible = true;
+  root.visible = true;
+}
+
+function hideFreeDragGhost(fd) {
+  const root = fd?.ghostRoot;
+  if (!root) return;
+  root.visible = false;
+  scene.remove(root);
+  root.traverse((c) => {
+    c.geometry?.dispose?.();
+    c.material?.dispose?.();
+  });
+  if (fd) fd.ghostRoot = null;
+}
+
+function snapshotXformForUndo() {
+  if (state.selectedObj) {
+    const entry = state.objects.find((o) => o.mesh === state.selectedObj);
+    if (!entry) return null;
+    return {
+      kind: 'object',
+      id: entry.id,
+      position: entry.mesh.position.toArray(),
+      rotation: [entry.mesh.rotation.x, entry.mesh.rotation.y, entry.mesh.rotation.z],
+      scale: entry.mesh.scale.toArray(),
+    };
+  }
+  if (state.selectedFeature) {
+    const f = state.selectedFeature;
+    return {
+      kind: 'feature',
+      id: f.id,
+      x: f.x,
+      z: f.z,
+      props: {
+        rotation: f.props.rotation || 0,
+        baseWidth: f.props.baseWidth,
+        baseLength: f.props.baseLength,
+        height: f.props.height,
+        depth: f.props.depth,
+      },
+    };
+  }
+  if (selectedSculptId != null || selectedGroundId != null) {
+    const L = getSelectedPaintLayer();
+    if (!L) return null;
+    return {
+      kind: selectedSculptId != null ? 'sculpt' : 'ground',
+      id: L.id,
+      cx: L.cx || 0,
+      cz: L.cz || 0,
+      rotation: L.rotation || 0,
+      scaleX: L.scaleX || 1,
+      scaleY: L.scaleY || 1,
+      scaleZ: L.scaleZ || 1,
+    };
+  }
+  if (selectedGroupId) {
+    const g = state.groups.find((x) => x.id === selectedGroupId);
+    if (!g) return null;
+    return {
+      kind: 'group',
+      id: g.id,
+      members: snapshotGroupMembers(g),
+    };
+  }
+  return null;
+}
+
+function applyXformUndoSnap(snap) {
+  if (!snap) return;
+  if (snap.kind === 'object') {
+    const entry = state.objects.find((o) => o.id === snap.id);
+    if (!entry?.mesh) return;
+    entry.mesh.position.fromArray(snap.position);
+    entry.mesh.rotation.set(snap.rotation[0], snap.rotation[1], snap.rotation[2]);
+    entry.mesh.scale.fromArray(snap.scale);
+    syncObjectTransformProps(entry);
+    if (isMob(entry.type)) setMobHome(entry.mesh, entry.mesh.position.x, entry.mesh.position.z);
+    if (entry.type === 'water') rebuildCompositeHeightMap();
+    if (state.selectedObj === entry.mesh) applyTransformForSelection();
+    return;
+  }
+  if (snap.kind === 'feature') {
+    const f = state.features.find((x) => x.id === snap.id);
+    if (!f) return;
+    f.x = snap.x;
+    f.z = snap.z;
+    Object.assign(f.props, snap.props);
+    rebuildCompositeHeightMap();
+    if (state.selectedFeature === f) {
+      updateFeatureProxy();
+      applyTransformForSelection();
+      refreshFeaturePropLabels(f);
+    }
+    return;
+  }
+  if (snap.kind === 'sculpt' || snap.kind === 'ground') {
+    const list = snap.kind === 'sculpt' ? state.sculptLayers : state.groundLayers;
+    const L = list.find((x) => x.id === snap.id);
+    if (!L) return;
+    L.cx = snap.cx;
+    L.cz = snap.cz;
+    L.rotation = snap.rotation;
+    L.scaleX = snap.scaleX;
+    L.scaleY = snap.scaleY;
+    L.scaleZ = snap.scaleZ;
+    if (snap.kind === 'sculpt') rebuildCompositeHeightMap();
+    else rebuildGroundTexture();
+    if ((snap.kind === 'sculpt' ? selectedSculptId : selectedGroundId) === snap.id) {
+      updateLayerProxy();
+      applyTransformForSelection();
+    }
+    return;
+  }
+  if (snap.kind === 'group') {
+    const g = state.groups.find((x) => x.id === snap.id);
+    if (!g || !snap.members) return;
+    // Restore members from snapshot (absolute TRS)
+    snap.members.forEach((s) => {
+      if (s.kind === 'object') {
+        const o = state.objects.find((x) => x.id === s.id);
+        if (!o) return;
+        o.mesh.position.set(s.x, s.y ?? o.mesh.position.y, s.z);
+        o.mesh.rotation.y = s.rotY;
+        o.mesh.scale.set(s.sx, s.sy, s.sz);
+        syncObjectTransformProps(o);
+      } else if (s.kind === 'feature') {
+        const f = state.features.find((x) => x.id === s.id);
+        if (!f) return;
+        f.x = s.x;
+        f.z = s.z;
+        f.props.rotation = s.rot;
+        f.props.baseWidth = s.baseW;
+        f.props.baseLength = s.baseL;
+        if (f.type === 'hole') f.props.depth = s.height;
+        else f.props.height = s.height;
+      }
+    });
+    rebuildCompositeHeightMap();
+    if (selectedGroupId === snap.id) applyTransformForSelection();
+  }
+}
+
+function xformSnapChanged(a, b) {
+  if (!a || !b || a.kind !== b.kind || a.id !== b.id) return false;
+  return JSON.stringify(a) !== JSON.stringify(b);
+}
+
 transform.addEventListener('dragging-changed', (e) => {
   if (e.value && getSelectionLocked()) {
     if (transform.object) transform.detach();
@@ -1116,6 +1423,18 @@ transform.addEventListener('dragging-changed', (e) => {
   transformDragging = e.value;
   if (e.value) buildSelectSuppress = true; // don't re-select on pointerup after a gizmo drag
   orbit.enabled = !e.value;
+  if (e.value) {
+    xformUndoSnap = snapshotXformForUndo();
+  }
+  if (e.value && state.selectedObj && transform.object === state.selectedObj) {
+    const obj = state.selectedObj;
+    const gy = terrainAnchorY(obj, obj.position.x, obj.position.z);
+    objTerrainDrag = {
+      startX: obj.position.x,
+      startZ: obj.position.z,
+      yOffset: obj.position.y - gy,
+    };
+  }
   if (e.value && state.selectedFeature) {
     const f = state.selectedFeature;
     featureDragStart = {
@@ -1157,10 +1476,14 @@ transform.addEventListener('dragging-changed', (e) => {
     syncFeatureFromProxy(true);
     featureProxy.scale.set(1, 1, 1);
     featureDragStart = null;
+    updateFeatureProxy();
+    transform.invalidateBounds?.();
   } else if (!e.value && (selectedSculptId != null || selectedGroundId != null)) {
     syncLayerFromProxy(true);
     layerProxy.scale.set(1, 1, 1);
     layerDragStart = null;
+    updateLayerProxy();
+    transform.invalidateBounds?.();
   } else if (!e.value && selectedGroupId) {
     syncGroupFromProxy(true);
     groupDragStart = null;
@@ -1169,15 +1492,35 @@ transform.addEventListener('dragging-changed', (e) => {
     // Persist full gizmo rotate/scale into props so copy/paste & rebuild keep them
     const entry = state.objects.find((o) => o.mesh === obj);
     if (entry) syncObjectTransformProps(entry);
-    if (state.snap && transform.mode === 'translate') {
+    if (state.snap && (transform.mode === 'translate' || transform.mode === 'scale')) {
       obj.position.x = Math.round(obj.position.x / SNAP) * SNAP;
       obj.position.z = Math.round(obj.position.z / SNAP) * SNAP;
+    }
+    // After XZ snap, restick Y to heightmap (horizontal moves already followed terrain live)
+    if (objTerrainDrag && (Math.abs(obj.position.x - objTerrainDrag.startX) > 1e-6
+      || Math.abs(obj.position.z - objTerrainDrag.startZ) > 1e-6)) {
+      stickObjectYToTerrain(obj, objTerrainDrag.yOffset);
     }
     if (obj.userData?.type === 'water') rebuildCompositeHeightMap();
     else if (state.snap) snapObjectToTerrain(obj); // XZ only — Y stays free until 落地
     if (isMob(obj.userData?.type)) {
       setMobHome(obj, obj.position.x, obj.position.z);
       updateMobRadiusHelper();
+    }
+    // Do NOT remasure geometry (would pick up anim); just refresh from cache
+    transform.refresh?.();
+    objTerrainDrag = null;
+  }
+  // Push undo after end-of-drag sync so "after" matches committed state
+  if (!e.value && xformUndoSnap) {
+    const after = snapshotXformForUndo();
+    const before = xformUndoSnap;
+    xformUndoSnap = null;
+    if (xformSnapChanged(before, after)) {
+      pushCmd({
+        undo: () => applyXformUndoSnap(before),
+        redo: () => applyXformUndoSnap(after),
+      });
     }
   }
 });
@@ -1190,6 +1533,27 @@ transform.addEventListener('objectChange', () => {
   if (state.selectedFeature) syncFeatureFromProxy(false);
   else if (selectedSculptId != null || selectedGroundId != null) syncLayerFromProxy(false);
   else if (selectedGroupId) syncGroupFromProxy(false);
+  else if (state.selectedObj) {
+    const obj = state.selectedObj;
+    // Horizontal translate (arrow or body drag): ride the heightmap, keep start offset
+    if (objTerrainDrag && transformDragging && (
+      Math.abs(obj.position.x - objTerrainDrag.startX) > 1e-6
+      || Math.abs(obj.position.z - objTerrainDrag.startZ) > 1e-6
+    )) {
+      stickObjectYToTerrain(obj, objTerrainDrag.yOffset);
+    }
+    if (obj.userData?.type === 'water') {
+      const entry = state.objects.find((o) => o.mesh === obj);
+      if (transformDragging && (transform.mode === 'scale' || transform.mode === 'translate' || transform.mode === 'rotate')) {
+        if (entry) syncObjectTransformProps(entry);
+        rebuildCompositeHeightMap();
+        if (!objTerrainDrag) snapObjectToTerrain(obj);
+        else stickObjectYToTerrain(obj, objTerrainDrag.yOffset);
+      } else {
+        fixWaterBankScale(obj);
+      }
+    }
+  }
 });
 scene.add(transform.getHelper());
 transform.getHelper().visible = false;
@@ -1302,6 +1666,81 @@ terrain.receiveShadow = true;
 terrain.castShadow = true;
 terrain.name = 'terrain';
 scene.add(terrain);
+
+/** Edit-mode grid that sits just above the island heightmap (not buried under hills) */
+const editGrid = new THREE.Group();
+editGrid.name = 'editGrid';
+editGrid.raycast = () => {};
+scene.add(editGrid);
+let _editGridLines = null;
+let _editGridDiv = -1;
+
+function editGridDivForCamera() {
+  const dist = camera.position.distanceTo(orbit.target);
+  // ~3× denser than before (cells 3× smaller)
+  if (dist < 16) return 168;
+  if (dist < 28) return 132;
+  if (dist < 45) return 108;
+  if (dist < 70) return 72;
+  return 48;
+}
+
+function rebuildEditGrid(forceDiv) {
+  if (typeof sampleHeight !== 'function') return;
+  const div = forceDiv ?? editGridDivForCamera();
+  _editGridDiv = div;
+  const half = WORLD * 0.5;
+  const step = WORLD / div;
+  const lift = 0.12;
+  const positions = [];
+  for (let i = 0; i <= div; i++) {
+    const a = -half + i * step;
+    // line along X at fixed Z=a
+    for (let j = 0; j < div; j++) {
+      const x0 = -half + j * step;
+      const x1 = x0 + step;
+      positions.push(x0, sampleHeight(x0, a) + lift, a, x1, sampleHeight(x1, a) + lift, a);
+    }
+    // line along Z at fixed X=a
+    for (let j = 0; j < div; j++) {
+      const z0 = -half + j * step;
+      const z1 = z0 + step;
+      positions.push(a, sampleHeight(a, z0) + lift, z0, a, sampleHeight(a, z1) + lift, z1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x5a5348,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  });
+  if (_editGridLines) {
+    editGrid.remove(_editGridLines);
+    _editGridLines.geometry.dispose();
+    _editGridLines.material.dispose();
+  }
+  _editGridLines = new THREE.LineSegments(geo, mat);
+  _editGridLines.raycast = () => {};
+  editGrid.add(_editGridLines);
+}
+
+function syncEditGridLod() {
+  if (!editGrid.visible || typeof sampleHeight !== 'function') return;
+  const div = editGridDivForCamera();
+  if (div !== _editGridDiv) rebuildEditGrid(div);
+}
+
+function syncEditGridVisibility() {
+  const editing = typeof play !== 'undefined' && !play.active && state.mode !== 'play';
+  editGrid.visible = editing;
+  if (editing && typeof sampleHeight === 'function') {
+    if (!_editGridLines) rebuildEditGrid();
+    else syncEditGridLod();
+  }
+}
+
 // Island palette used when baking vertex colors (was shader uniforms)
 const terrainPalette = {
   low: new THREE.Color(0x7e8a6e),
@@ -2148,6 +2587,21 @@ function applyIslandColors() {
 
 function rebuildCompositeHeightMap() {
   if (!state.baseMap) generateBaseHeightMap();
+
+  // Remember ground under each object so we can keep relative height after terrain edits
+  const groundLift = state.objects.map((o) => {
+    if (!o?.mesh) return null;
+    const x = o.mesh.position.x;
+    const z = o.mesh.position.z;
+    return {
+      entry: o,
+      x,
+      z,
+      oldGround: sampleHeight(x, z),
+      oldY: o.mesh.position.y,
+    };
+  }).filter(Boolean);
+
   // Start from ocean floor — do NOT bake sculpt yet (island Math.max would wipe it)
   const map = state.baseMap.map((row) => row.slice());
   // 1) Islands raise land
@@ -2162,21 +2616,42 @@ function rebuildCompositeHeightMap() {
   // 4) 澤 digs a shallow pond under the water surface
   state.objects.forEach((o) => {
     if (o.type !== 'water') return;
-    stampWaterPondOnto(map, o.mesh.position.x, o.mesh.position.z, o.props);
+    stampWaterPondOnto(map, o.mesh.position.x, o.mesh.position.z, o.props, o.mesh.scale);
   });
   state.heightMap = map;
   applyHeightMapToGeometry();
   rebuildFeatureTint();
   refreshHoleWater();
   refreshSculptWater();
-  // Only re-float water / floaters when terrain changes — never yank props to the floor
-  state.objects.forEach((o) => {
-    if (o.type === 'water' || o.mesh.userData.float) snapObjectToTerrain(o.mesh);
+
+  // Lift objects with the ground — keep the same offset above terrain
+  groundLift.forEach((g) => {
+    const o = g.entry;
+    if (!o?.mesh || !state.objects.includes(o)) return;
+    if (o.type === 'water' || o.mesh.userData.float) {
+      snapObjectToTerrain(o.mesh);
+      return;
+    }
+    const newGround = sampleHeight(g.x, g.z);
+    const dH = newGround - g.oldGround;
+    if (Math.abs(dH) < 1e-4) return;
+    o.mesh.position.y = g.oldY + dH;
+    if (isMob(o.type)) {
+      const m = o.mesh.userData.mob;
+      if (m) {
+        if (m.homeY != null) m.homeY += dH;
+        if (m.ty != null) m.ty += dH;
+      }
+      syncMobOriginToProps(o);
+    }
+    syncObjectTransformProps(o);
   });
+
   // Don't yank proxies mid-gizmo-drag (would cancel move/rotate/scale)
   if (!(transformDragging && transform.object === featureProxy)) updateFeatureProxy();
   if (!(transformDragging && transform.object === layerProxy)) updateLayerProxy();
   rebuildGroundTexture();
+  if (typeof rebuildEditGrid === 'function') rebuildEditGrid();
 }
 
 function applyHeightMapToGeometry() {
@@ -2296,6 +2771,80 @@ function findSculptLayerAt(wx, wz, minAbs = 0.04) {
     if (v > bestV) { bestV = v; best = L; }
   }
   return best;
+}
+
+/** Approx. vertical stamp contribution at feature center (for gizmo base Y). */
+function featureCenterAmp(f) {
+  if (!f) return 0;
+  if (f.type === 'hole') return -(f.props.depth || 2);
+  if (f.type === 'island') return Math.max(0.15, f.props.height || 0.55);
+  return Math.max(0.5, f.props.height || 4);
+}
+
+/** Base terrain Y under a feature (peak minus this stamp’s center amp). */
+function featureBaseY(f) {
+  const peak = sampleHeight(f.x, f.z);
+  return peak - featureCenterAmp(f);
+}
+
+/**
+ * World-ish bounds of a sculpt layer’s painted content (for gizmo box).
+ * Returns { half, centerY, baseLift } in meters relative to terrain base under (cx,cz).
+ */
+function measureSculptLayerGizmo(L) {
+  const map = L?.delta;
+  const amp = L.scaleY || 1;
+  const sx = Math.max(0.05, L.scaleX || 1);
+  const sz = Math.max(0.05, L.scaleZ || 1);
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  let minH = Infinity, maxH = -Infinity;
+  let any = false;
+  const eps = 0.03;
+  if (map) {
+    const step = Math.max(1, Math.floor(SEG / 64));
+    for (let iy = 0; iy <= SEG; iy += step) {
+      for (let ix = 0; ix <= SEG; ix += step) {
+        const raw = map[iy][ix];
+        if (Math.abs(raw) < eps) continue;
+        const h = raw * amp;
+        const p = mapIndexToWorld(ix, iy);
+        // Warp sample-frame → current layer frame (inverse of sampleLayerAtCell)
+        ensureLayerOrigin(L);
+        const ox = L.originCx != null ? L.originCx : (L.cx || 0);
+        const oz = L.originCz != null ? L.originCz : (L.cz || 0);
+        const lx = p.x - ox;
+        const lz = p.z - oz;
+        const rot = L.rotation || 0;
+        const c = Math.cos(rot), s = Math.sin(rot);
+        const wx = (L.cx || 0) + (c * lx - s * lz) * sx;
+        const wz = (L.cz || 0) + (s * lx + c * lz) * sz;
+        minX = Math.min(minX, wx); maxX = Math.max(maxX, wx);
+        minZ = Math.min(minZ, wz); maxZ = Math.max(maxZ, wz);
+        minH = Math.min(minH, h); maxH = Math.max(maxH, h);
+        any = true;
+      }
+    }
+  }
+  const cx = L.cx || 0;
+  const cz = L.cz || 0;
+  if (!any) {
+    return {
+      half: { x: 4 * sx, y: 1.5 * Math.abs(amp), z: 4 * sz },
+      centerY: 1.5 * Math.abs(amp) * 0.5,
+      baseLift: 0,
+    };
+  }
+  const halfX = Math.max(1, (maxX - minX) * 0.5);
+  const halfZ = Math.max(1, (maxZ - minZ) * 0.5);
+  const y0 = Math.min(0, minH);
+  const y1 = Math.max(0, maxH);
+  const halfY = Math.max(0.4, (y1 - y0) * 0.5);
+  const centerY = (y0 + y1) * 0.5;
+  return {
+    half: { x: halfX, y: halfY, z: halfZ },
+    centerY,
+    baseLift: 0,
+  };
 }
 
 function findGroundLayerAt(wx, wz, minA = 0.05) {
@@ -2767,16 +3316,32 @@ function featureFootprintCells(f, radiusScale = 0.9) {
   return cells;
 }
 
-function waterPondDepth(props) {
-  if (props.digDepth != null) return Math.max(0.25, props.digDepth);
-  const s = props.size || 2;
-  return Math.max(0.35, Math.min(1.4, s * 0.28));
+function waterPondDepth(props, scaleXZ = 1) {
+  let depth;
+  if (props.digDepth != null) depth = Math.max(0.25, props.digDepth);
+  else {
+    const s = props.size || 2;
+    depth = Math.max(0.35, Math.min(1.4, s * 0.28));
+  }
+  return depth * Math.max(1, scaleXZ);
+}
+
+/** Effective lake footprint (props.size × mesh scale). */
+function effectiveWaterSize(props, mesh) {
+  const base = props?.size || 2.2;
+  if (!mesh) return base;
+  const sx = Math.abs(mesh.scale?.x || 1);
+  const sz = Math.abs(mesh.scale?.z || 1);
+  return base * Math.max(sx, sz);
 }
 
 /** Shallow depression under a 澤 so there is a hole below the waterline */
-function stampWaterPondOnto(map, wx, wz, props) {
-  const size = props.size || 2;
-  const depth = waterPondDepth(props);
+function stampWaterPondOnto(map, wx, wz, props, meshScale) {
+  const scaleXZ = meshScale
+    ? Math.max(Math.abs(meshScale.x || 1), Math.abs(meshScale.z || 1))
+    : 1;
+  const size = (props.size || 2) * scaleXZ;
+  const depth = waterPondDepth(props, scaleXZ);
   stampFeatureOnto(map, {
     id: -1,
     type: 'hole',
@@ -2910,10 +3475,21 @@ function updateFeatureProxy() {
     return;
   }
   if (transformDragging && transform.object === featureProxy) return;
-  const y = sampleHeight(f.x, f.z);
-  featureProxy.position.set(f.x, y + 0.15, f.z);
+  const bw = Math.max(2, f.props.baseWidth || 10);
+  const bl = Math.max(2, f.props.baseLength || 10);
+  const h = f.type === 'hole'
+    ? Math.max(0.4, f.props.depth || 1)
+    : Math.max(0.5, f.props.height || 1);
+  // Place proxy at terrain base under the stamp (not at the peak)
+  const baseY = featureBaseY(f);
+  featureProxy.position.set(f.x, baseY + 0.05, f.z);
   featureProxy.rotation.set(0, f.props.rotation || 0, 0);
   featureProxy.scale.set(1, 1, 1);
+  // Mountain/island rise above foot; holes: proxy at rim, box extends downward
+  featureProxy.userData.gizmoBounds = {
+    half: { x: bw * 0.5, y: h * 0.5, z: bl * 0.5 },
+    center: { x: 0, y: f.type === 'hole' ? -h * 0.5 : h * 0.5, z: 0 },
+  };
 }
 
 function refreshFeaturePropLabels(f) {
@@ -2949,6 +3525,15 @@ function syncFeatureFromProxy(forceRebuild) {
     } else {
       f.props.height = Math.max(0.5, Math.min(40, featureDragStart.height * sy));
     }
+    // Edge-anchored scale moves the stamp center
+    let x = featureProxy.position.x;
+    let z = featureProxy.position.z;
+    if (state.snap) {
+      x = Math.round(x / SNAP) * SNAP;
+      z = Math.round(z / SNAP) * SNAP;
+    }
+    f.x = x;
+    f.z = z;
   } else {
     // translate (default)
     let x = featureProxy.position.x;
@@ -2973,7 +3558,7 @@ function syncFeatureFromProxy(forceRebuild) {
 
   if (forceRebuild) {
     rebuildCompositeHeightMap();
-    featureProxy.position.set(f.x, sampleHeight(f.x, f.z) + 0.15, f.z);
+    featureProxy.position.set(f.x, featureBaseY(f) + 0.05, f.z);
     featureProxy.rotation.set(0, f.props.rotation || 0, 0);
     featureProxy.scale.set(1, 1, 1);
     if (featureDragStart) {
@@ -2992,7 +3577,7 @@ function syncFeatureFromProxy(forceRebuild) {
     featureRebuildTimer = setTimeout(() => {
       rebuildCompositeHeightMap();
       if (!transformDragging) {
-        featureProxy.position.set(f.x, sampleHeight(f.x, f.z) + 0.15, f.z);
+        featureProxy.position.set(f.x, featureBaseY(f) + 0.05, f.z);
       }
       refreshFeaturePropLabels(f);
     }, 40);
@@ -3014,10 +3599,32 @@ function updateLayerProxy() {
   if (transformDragging && transform.object === layerProxy) return;
   ensureLayerOrigin(L);
   const cx = L.cx || 0, cz = L.cz || 0;
-  layerProxy.position.set(cx, sampleHeight(cx, cz) + 0.35, cz);
-  layerProxy.rotation.set(0, L.rotation || 0, 0);
-  // Keep unit scale on proxy — layer scale lives in L.scaleX/Y/Z
-  layerProxy.scale.set(1, 1, 1);
+  const isSculpt = selectedSculptId != null;
+  const sx = L.scaleX || 1;
+  const sy = L.scaleY || 1;
+  const sz = L.scaleZ || 1;
+
+  if (isSculpt) {
+    const peak = sampleHeight(cx, cz);
+    const layerHere = sampleLayerAtWorld(L, 'delta', cx, cz) * sy;
+    const baseY = peak - layerHere;
+    const g = measureSculptLayerGizmo(L);
+    layerProxy.position.set(cx, baseY + 0.05, cz);
+    layerProxy.rotation.set(0, L.rotation || 0, 0);
+    layerProxy.scale.set(1, 1, 1);
+    layerProxy.userData.gizmoBounds = {
+      half: g.half,
+      center: { x: 0, y: g.centerY, z: 0 },
+    };
+  } else {
+    layerProxy.position.set(cx, sampleHeight(cx, cz) + 0.08, cz);
+    layerProxy.rotation.set(0, L.rotation || 0, 0);
+    layerProxy.scale.set(1, 1, 1);
+    layerProxy.userData.gizmoBounds = {
+      half: { x: 6 * sx, y: 0.12, z: 6 * sz },
+      center: { x: 0, y: 0, z: 0 },
+    };
+  }
 }
 
 function ensureLayerDragStart() {
@@ -3058,6 +3665,8 @@ function syncLayerFromProxy(forceRebuild) {
     if (selectedSculptId != null) {
       L.scaleY = Math.max(0.15, Math.min(8, layerDragStart.scaleY * sy));
     }
+    L.cx = layerProxy.position.x;
+    L.cz = layerProxy.position.z;
   } else {
     // translate
     L.cx = layerProxy.position.x;
@@ -3084,10 +3693,8 @@ function selectPaintLayer(kind, id) {
     return;
   }
   if (kind === 'ground' && selectedGroundId === id && transform.object === layerProxy && transform.enabled) {
+    applyGizmoAxisMask();
     showXformBar();
-    if (state.xformMode === 'scale') {
-      transform.showX = true; transform.showY = false; transform.showZ = true;
-    }
     return;
   }
   // Soft-switch out of paint modes so gizmo isn't stolen by brush strokes
@@ -3100,7 +3707,7 @@ function selectPaintLayer(kind, id) {
     if (wrap) wrap.style.display = '';
     document.getElementById('panel-sculpt').style.display = 'none';
     document.getElementById('panel-ground').style.display = 'none';
-    document.getElementById('hint').textContent = '塑山／路徑可移／轉／縮 · 點空白處取消選取';
+    document.getElementById('hint').textContent = '塑山／路徑：拖動箭頭／縮放塊／旋轉弧 · 點空白處取消選取';
     rebuildHotbarSlots();
   }
   // Clear selection without full deselectAll (avoids wiping outliner mid-click)
@@ -3194,7 +3801,7 @@ function selectPaintLayer(kind, id) {
 // Pre-civilization object factories (archaic 山海經)
 // ═══════════════════════════════════════════════════════════
 function mat(color, opts = {}) {
-  const style = (typeof gfx === 'undefined') ? 'shanshui' : gfx.style;
+  const style = (typeof gfx === 'undefined') ? 'hanmo' : gfx.style;
   const flat = style === 'shanshui' || style === 'hanmo';
   const rough = style === 'natural' ? 0.68 : (style === 'hanmo' ? 0.78 : 0.88);
   return new THREE.MeshStandardMaterial({
@@ -3253,7 +3860,7 @@ const INK = {
 
 function makeWaterBody(props) {
   const g = new THREE.Group();
-  const s = props.size;
+  const s = Math.max(0.4, props.size || 2.2);
   let geo;
   if (props.shape === 'square') geo = new THREE.PlaneGeometry(s, s);
   else {
@@ -3272,16 +3879,35 @@ function makeWaterBody(props) {
   const mesh = new THREE.Mesh(geo, mat(props.waterColor, { transparent: true, opacity: 0.72, roughness: 0.2, flatShading: true }));
   mesh.name = 'waterSurf';
   g.add(mesh);
-  // muddy bank stones
+  // Bank stones — fixed world size (do not grow with 澤 size / parent scale)
   const bank = cprop(props, 'color', '#6a5a48');
+  const banks = new THREE.Group();
+  banks.name = 'waterBanks';
   for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
-    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 + Math.random() * 0.15, 0), mat(bank));
-    stone.position.set(Math.cos(a) * s * 0.48, 0.08, Math.sin(a) * s * 0.48);
-    g.add(stone);
+    const a = (i / 6) * Math.PI * 2 + hash2(i, 11) * 0.2;
+    const rStone = 0.18 + hash2(i, 3) * 0.1; // stable size, independent of lake size
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(rStone, 0), mat(bank));
+    const edge = s * (0.46 + hash2(i, 7) * 0.06);
+    stone.position.set(Math.cos(a) * edge, 0.08, Math.sin(a) * edge);
+    stone.rotation.set(hash2(i, 4), hash2(i, 5) * 3, hash2(i, 6));
+    stone.userData.bankStone = true;
+    banks.add(stone);
   }
+  g.add(banks);
   g.userData.float = true;
+  g.userData.waterBanks = banks;
   return g;
+}
+
+/** Keep 澤 bank stones at constant world size while water/group scales. */
+function fixWaterBankScale(mesh) {
+  if (!mesh || mesh.userData?.type !== 'water') return;
+  const banks = mesh.getObjectByName('waterBanks') || mesh.userData.waterBanks;
+  if (!banks) return;
+  const sx = Math.max(0.001, Math.abs(mesh.scale.x));
+  const sy = Math.max(0.001, Math.abs(mesh.scale.y));
+  const sz = Math.max(0.001, Math.abs(mesh.scale.z));
+  banks.scale.set(1 / sx, 1 / sy, 1 / sz);
 }
 
 function makeRock(props) {
@@ -3929,6 +4555,42 @@ function setMobHome(mesh, x, z) {
   }
 }
 
+/** Snap live pose back to placement home so gizmo / AABB / 遊走半徑 ignore AI offsets. */
+function snapMobToPlacement(mesh) {
+  if (!mesh || !isMob(mesh.userData?.type)) return;
+  const p = mesh.userData.props || {};
+  if (!mesh.userData.mob) initMobBrain(mesh, p);
+  const m = mesh.userData.mob;
+  const type = mesh.userData.type;
+  const aerial = isFlyingMob(type) || isSwimMob(type);
+  const hx = p.originX != null ? +p.originX : m.homeX;
+  const hz = p.originZ != null ? +p.originZ : m.homeZ;
+  m.homeX = hx;
+  m.homeZ = hz;
+  m.tx = hx;
+  m.tz = hz;
+  mesh.position.x = hx;
+  mesh.position.z = hz;
+  if (aerial) {
+    const hy = p.originY != null ? +p.originY : (m.homeY ?? mesh.position.y);
+    m.homeY = hy;
+    m.ty = hy;
+    mesh.position.y = hy;
+  } else {
+    mesh.position.y = sampleHeight(hx, hz);
+  }
+  mesh.rotation.x = 0;
+  const parts = ensureMobParts(mesh);
+  if (parts.wingL) parts.wingL.rotation.z = -0.15;
+  if (parts.wingR) parts.wingR.rotation.z = 0.15;
+  if (parts.armL) parts.armL.rotation.x = 0;
+  if (parts.armR) parts.armR.rotation.x = 0;
+  if (parts.legL) parts.legL.rotation.x = 0;
+  if (parts.legR) parts.legR.rotation.x = 0;
+  if (parts.tail) parts.tail.rotation.y = 0;
+  mesh.updateMatrixWorld(true);
+}
+
 function ensureMobParts(mesh) {
   let parts = mesh.userData._parts;
   if (parts) return parts;
@@ -3963,29 +4625,21 @@ function updateMobs(dt) {
     // Keep nametag in sync (cheap if already correct)
     if (p.showName) syncMobNameTag(o);
     else if (mesh.getObjectByName('mobNameTag')) removeMobNameTag(mesh);
-    // Freeze while gizmo-dragging or selected in edit (easier to place)
+    // Freeze while gizmo-dragging or selected in edit — home stays at placement (setMobHome on drag end)
     if (transformDragging && state.selectedObj === mesh) continue;
-    if (!play.active && state.selectedObj === mesh) {
-      m.homeX = mesh.position.x;
-      m.homeZ = mesh.position.z;
-      if (aerial) m.homeY = mesh.position.y;
-      syncMobOriginToProps(o);
-      continue;
-    }
+    if (!play.active && state.selectedObj === mesh) continue;
 
-    // 「不移動」— stay put (idle bob / wing flap only)
+    // 「不移動」— stay at placement home (idle bob / wing flap only)
     if (p.stationary) {
-      m.tx = mesh.position.x;
-      m.tz = mesh.position.z;
-      m.homeX = mesh.position.x;
-      m.homeZ = mesh.position.z;
+      mesh.position.x = m.homeX;
+      mesh.position.z = m.homeZ;
+      m.tx = m.homeX;
+      m.tz = m.homeZ;
       if (aerial) {
-        m.ty = mesh.position.y;
-        m.homeY = mesh.position.y;
+        m.ty = m.homeY ?? mesh.position.y;
       } else {
-        mesh.position.y = sampleHeight(mesh.position.x, mesh.position.z);
+        mesh.position.y = sampleHeight(m.homeX, m.homeZ);
       }
-      syncMobOriginToProps(o);
       m.phase += dt * (aerial ? 6 : 1.6);
       if (aerial) {
         const wingL = parts.wingL;
@@ -4119,10 +4773,11 @@ function updateMobRadiusHelper() {
   if (!mesh || !isMob(mesh.userData?.type) || play.active) return;
   const p = mesh.userData.props || {};
   if (p.stationary) return; // 不移動 — no wander ring
-  const r = Math.max(0.5, p.wanderRadius || 5);
+  const r = Math.max(0.5, p.wanderRadius ?? 6);
   const brain = mesh.userData.mob;
-  const cx = brain?.homeX ?? mesh.position.x;
-  const cz = brain?.homeZ ?? mesh.position.z;
+  // Always center on placement origin — never the live wander pose
+  const cx = p.originX != null ? +p.originX : (brain?.homeX ?? mesh.position.x);
+  const cz = p.originZ != null ? +p.originZ : (brain?.homeZ ?? mesh.position.z);
   const y = sampleHeight(cx, cz) + 0.04;
   mobRadiusHelper = new THREE.Mesh(
     new THREE.RingGeometry(Math.max(0.2, r - 0.06), r, 64),
@@ -4137,15 +4792,28 @@ function updateMobRadiusHelper() {
   scene.add(mobRadiusHelper);
 }
 
+/** Terrain (or water-surface) Y under an object — used when sliding horizontally. */
+function terrainAnchorY(obj, x = obj?.position?.x, z = obj?.position?.z) {
+  if (obj?.userData?.float || obj?.userData?.type === 'water') {
+    const p = obj.userData.props || {};
+    const size = effectiveWaterSize(p, obj);
+    return waterSurfaceY(x, z, size * 0.55, p.waterLevel ?? 0.1);
+  }
+  return sampleHeight(x, z);
+}
+
+/** Keep object’s height offset above the heightmap while XZ changes. */
+function stickObjectYToTerrain(obj, yOffset = 0) {
+  if (!obj) return;
+  obj.position.y = terrainAnchorY(obj, obj.position.x, obj.position.z) + yOffset;
+}
+
 function snapObjectToTerrain(obj, opts = {}) {
   if (!obj) return;
   if (transformDragging && !opts.forceGround) return;
 
   if (obj.userData.float || obj.userData.type === 'water') {
-    const p = obj.userData.props || {};
-    const size = p.size || 2;
-    // water surface sits at the lowest bank (not avg/high rim — that floats on mountains)
-    obj.position.y = waterSurfaceY(obj.position.x, obj.position.z, size * 0.55, p.waterLevel ?? 0.1);
+    stickObjectYToTerrain(obj, 0);
     return;
   }
   if (state.snap) {
@@ -4229,6 +4897,7 @@ function createObject(type, props, position, opts = {}) {
   if (type === 'water') rebuildCompositeHeightMap();
   refreshOutliner();
   if (isMob(type)) syncMobNameTag(entry);
+  if (type === 'water') fixWaterBankScale(mesh);
   return entry;
 }
 
@@ -4273,6 +4942,7 @@ function rebuildObjectMesh(entry) {
   if (entry.props.rotationZ != null) mesh.rotation.z = entry.props.rotationZ;
   mesh.scale.copy(scl);
   syncObjectTransformProps(entry);
+  if (entry.type === 'water') fixWaterBankScale(mesh);
   scene.add(mesh);
   applyMeshShadows(mesh, gfxShadowsOn());
   entry.mesh = mesh;
@@ -4368,6 +5038,24 @@ function setSelectionLocked(locked) {
   refreshOutliner();
 }
 
+/** Axis visibility for stamp-like selections (山/穴/paint/group): Y-rotate, no ground Y-scale */
+function applyGizmoAxisMask() {
+  const stampLike = !!(
+    state.selectedFeature
+    || selectedSculptId != null
+    || selectedGroundId != null
+    || selectedGroupId
+  );
+  const ground = selectedGroundId != null;
+  transform.axisMask = {
+    translate: { x: true, y: true, z: true },
+    rotate: { x: !stampLike, y: true, z: !stampLike },
+    scale: { x: true, y: !ground, z: true },
+  };
+  transform.showX = transform.showY = transform.showZ = true;
+  transform.setSpace('world');
+}
+
 /** Attach or hide gizmo based on current selection + lock */
 function applyTransformForSelection() {
   if (getSelectionLocked()) {
@@ -4377,37 +5065,22 @@ function applyTransformForSelection() {
     return;
   }
   transform.enabled = true;
+  applyGizmoAxisMask();
   let attached = false;
   if (state.selectedObj) {
     const mesh = state.selectedObj;
     mesh.updateMatrixWorld(true);
-    transform.setSpace(state.xformMode === 'scale' ? 'local' : 'world');
-    transform.showX = transform.showY = transform.showZ = true;
-    transform.setMode(state.xformMode === 'scale' ? 'scale' : state.xformMode === 'rotate' ? 'rotate' : 'translate');
-    if (state.xformMode === 'scale') transform.setSpace('local');
+    transform.followTerrain = true;
     transform.attach(mesh);
     attached = true;
   } else if (state.selectedFeature) {
     updateFeatureProxy();
-    transform.setSpace(state.xformMode === 'scale' ? 'local' : 'world');
-    transform.showX = transform.showY = transform.showZ = true;
-    if (state.xformMode === 'rotate') {
-      transform.showX = false; transform.showZ = false;
-    }
-    transform.setMode(state.xformMode === 'scale' ? 'scale' : state.xformMode === 'rotate' ? 'rotate' : 'translate');
+    transform.followTerrain = false;
     transform.attach(featureProxy);
     attached = true;
   } else if (selectedSculptId != null || selectedGroundId != null) {
     updateLayerProxy();
-    transform.setSpace(state.xformMode === 'scale' ? 'local' : 'world');
-    transform.showX = transform.showY = transform.showZ = true;
-    if (state.xformMode === 'rotate') {
-      transform.showX = false; transform.showZ = false;
-    }
-    if (selectedGroundId != null && state.xformMode === 'scale') {
-      transform.showY = false;
-    }
-    transform.setMode(state.xformMode === 'scale' ? 'scale' : state.xformMode === 'rotate' ? 'rotate' : 'translate');
+    transform.followTerrain = false;
     transform.attach(layerProxy);
     attached = true;
   } else if (selectedGroupId != null) {
@@ -4417,20 +5090,18 @@ function applyTransformForSelection() {
       groupProxy.position.set(cx, sampleHeight(cx, cz) + 0.2, cz);
       groupProxy.rotation.set(0, 0, 0);
       groupProxy.scale.set(1, 1, 1);
-      transform.setSpace(state.xformMode === 'scale' ? 'local' : 'world');
-      transform.showX = transform.showY = transform.showZ = true;
-      if (state.xformMode === 'rotate') {
-        transform.showX = false; transform.showZ = false;
-      }
-      transform.setMode(state.xformMode === 'scale' ? 'scale' : state.xformMode === 'rotate' ? 'rotate' : 'translate');
+      groupProxy.userData.gizmoBounds = { half: { x: 5, y: 3, z: 5 }, center: { x: 0, y: 1.5, z: 0 } };
+      transform.followTerrain = false;
       transform.attach(groupProxy);
       attached = true;
     }
   }
+  if (!attached) transform.followTerrain = false;
   transform.getHelper().visible = attached;
 }
 
 function deselectAll() {
+  if (state.selectedObj) state.selectedObj.userData.freezeAnim = false;
   if (transform.object) transform.detach();
   transform.getHelper().visible = false;
   transform.enabled = state.mode === 'build' || state.mode === 'list';
@@ -4521,6 +5192,18 @@ function applyMultiSelection() {
   showMultiProps();
 }
 
+function resetPlantPose(mesh) {
+  if (!mesh) return;
+  mesh.traverse((c) => {
+    // Only clear wind lean — keep root / cluster placement yaw
+    if (c.name === 'plantSway') c.rotation.set(0, 0, 0);
+    if (c.userData?.baseOut != null) {
+      c.rotation.set(0, 0, (c.userData.baseOut || 0) * 0.5);
+    }
+  });
+  mesh.updateMatrixWorld(true);
+}
+
 function selectObject(mesh, { additive = false } = {}) {
   if (state.mode !== 'build' && state.mode !== 'list') return;
   const entry = state.objects.find((o) => o.mesh === mesh);
@@ -4534,6 +5217,9 @@ function selectObject(mesh, { additive = false } = {}) {
   }
   deselectAll();
   state.selectedObj = mesh;
+  mesh.userData.freezeAnim = true;
+  resetPlantPose(mesh);
+  if (isMob(mesh.userData?.type)) snapMobToPlacement(mesh);
   state.multi = [{ kind: 'object', id: entry.id }];
   applyTransformForSelection();
   showXformBar();
@@ -4581,7 +5267,7 @@ function showXformBar(opts = {}) {
     } else {
       b.style.display = '';
     }
-    b.classList.toggle('active', !deleteOnly && !locked && act === state.xformMode);
+    b.classList.remove('active');
     b.classList.toggle('lock-on', isLock && locked);
     if (isLock) b.title = locked ? '解鎖' : '鎖定';
     if (isLock) b.textContent = locked ? '🔓 解鎖' : '🔒 鎖';
@@ -4630,6 +5316,7 @@ function snapshotGroupMembers(g) {
       return {
         kind: 'object', id: m.id,
         x: o.mesh.position.x, y: o.mesh.position.y, z: o.mesh.position.z,
+        yOffset: o.mesh.position.y - terrainAnchorY(o.mesh, o.mesh.position.x, o.mesh.position.z),
         rotY: o.mesh.rotation.y,
         sx: o.mesh.scale.x, sy: o.mesh.scale.y, sz: o.mesh.scale.z,
       };
@@ -4716,9 +5403,15 @@ function syncGroupFromProxy(final) {
       if (o.mesh.userData.props && 'rotation' in o.mesh.userData.props) {
         o.mesh.userData.props.rotation = o.mesh.rotation.y;
       }
-      // Keep member Y free; only re-float water
-      if (o.type === 'water' || o.mesh.userData.float) snapObjectToTerrain(o.mesh);
-      else if (state.snap) snapObjectToTerrain(o.mesh);
+      // Horizontal group move: ride heightmap; pure Y on proxy still lifts via s.y + dy
+      const movedXZ = Math.abs(nx - s.x) > 1e-6 || Math.abs(nz - s.z) > 1e-6;
+      if (movedXZ) {
+        stickObjectYToTerrain(o.mesh, s.yOffset ?? 0);
+      } else {
+        const dy = groupProxy.position.y - st.py;
+        o.mesh.position.y = s.y + dy;
+      }
+      if (state.snap) snapObjectToTerrain(o.mesh);
       if (isMob(o.type)) setMobHome(o.mesh, nx, nz);
       if (o.type === 'water') needsTerrain = true;
     } else if (s.kind === 'feature') {
@@ -5075,7 +5768,6 @@ function renderPropsObject(mesh) {
 
   if (type === 'water') {
     addS('shape', '形狀', ['organic', 'square']);
-    addR('size', '大小', 0.6, 8, 0.1);
     addR('waterLevel', '水位', 0.02, 0.6, 0.02);
     if (p.digDepth == null) p.digDepth = 0.55;
     addR('digDepth', '下窪深度', 0.2, 2.5, 0.05);
@@ -5083,7 +5775,6 @@ function renderPropsObject(mesh) {
     addC('color', '岸石色', '#6a5a48');
   } else if (isTreeType(type)) {
     addR('height', '高度', 0.5, 4, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     if (p.clusterCount == null) p.clusterCount = 1;
     if (p.clusterRadius == null) p.clusterRadius = 2.5;
     addR('clusterCount', '叢數', 1, 16, 1);
@@ -5094,8 +5785,6 @@ function renderPropsObject(mesh) {
     if (p.fruitColor != null) addC('fruitColor', '果色', p.fruitColor);
     addNote('叢數>1 時，這一物件在半徑內長出多株（仍算一個物件）');
   } else if (isFlowerType(type)) {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     if (p.clusterCount == null) p.clusterCount = 1;
     if (p.clusterRadius == null) p.clusterRadius = 1.2;
     addR('clusterCount', '叢數', 1, 24, 1);
@@ -5106,32 +5795,22 @@ function renderPropsObject(mesh) {
     if (p.fruitColor != null) addC('fruitColor', '果／芯色', p.fruitColor);
     addNote('叢數>1 時，這一「菊」等代表一整片花（仍算一個物件）');
   } else if (type === 'rock') {
-    addR('size', '大小', 0.3, 4, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addR('roughness', '粗糙', 0, 1, 0.05);
     addC('color', '石色', '#5a554c');
     addC('color2', '石色 2', '#4a4840');
   } else if (type === 'shrine') {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['cairn', 'circle', 'bones']);
     addC('color', '主色', '#5a5448');
     addC('color2', '輔色', '#6a6255');
   } else if (type === 'totem') {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['bone', 'wood']);
     addC('color', '主色', '#d0c0a0');
     addC('color2', '輔色', '#e8dcc0');
   } else if (type === 'monolith') {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addS('style', '樣式', ['slab', 'split', 'obelisk']);
     addC('color', '主色', '#5c564c');
     addC('color2', '輔色', '#4a453c');
   } else if (type === 'bridge' || type === 'wood_bridge' || type === 'stone_bridge') {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     if (type === 'bridge') addS('style', '樣式', [
       { value: 'log', label: '木渡' },
       { value: 'plank', label: '木橋' },
@@ -5141,19 +5820,13 @@ function renderPropsObject(mesh) {
     addC('color', '主色', '#5a4030');
     addC('color2', '輔色', '#3a5a30');
   } else if (isStructureType(type)) {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addC('color', '主色', p.color || '#6a5038');
     addC('color2', '輔色', p.color2 || '#4a3830');
     if (p.accent != null) addC('accent', '點綴', p.accent);
   } else if (type === 'firepit') {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addC('color', '石色', '#4a453c');
     addC('color2', '火色', '#b85a30');
   } else if (type === 'nest') {
-    addR('scale', '縮放', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addC('color', '巢色', '#6a5038');
     addC('color2', '卵色', '#d8c8a0');
   } else if (isMob(type)) {
@@ -5161,8 +5834,6 @@ function renderPropsObject(mesh) {
     if (p.stationary == null) p.stationary = false;
     addCheck('showName', '顯示名稱（頭上）');
     addCheck('stationary', '不移動');
-    addR('scale', '大小', 0.25, 3, 0.05);
-    addR('rotation', '水平旋轉', 0, 6.28, 0.05);
     addR('wanderRadius', '遊走半徑', 1, 24, 0.5);
     if (isFlyingMob(type) || isSwimMob(type)) {
       addR('flyHeight', isSwimMob(type) ? '游深／浮高' : '飛高', 0.1, 14, 0.1);
@@ -5260,7 +5931,6 @@ function renderPropsFeature(f) {
     addR('baseLength', '島長', 12, 70, 0.5);
     addR('crescent', '彎月', 0, 1, 0.01);
     addR('roughness', '崎嶇', 0, 0.8, 0.01);
-    addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('shape', '外形', [
       { value: 'round', label: '圓島' },
       { value: 'square', label: '方島' },
@@ -5313,7 +5983,6 @@ function renderPropsFeature(f) {
     addR('baseWidth', '底寬', 3, 28, 0.2);
     addR('baseLength', '底長', 3, 28, 0.2);
     addR('steepness', '陡壁 Steep', 0, 1, 0.02);
-    addR('rotation', '旋轉', 0, 6.28, 0.05);
     addS('shape', '形狀', ['round', 'square']);
     addCheck('fillWater', '注水（澤式水面）');
     if (p.fillWater) {
@@ -5406,23 +6075,22 @@ function hitTerrain(e) {
 function hitTransformGizmo(e) {
   if (!transform.object || !transform.enabled) return false;
   const root = typeof transform.getHelper === 'function' ? transform.getHelper() : transform;
-  // Hidden helper (deselected / locked) must never eat clicks
   if (!root || root.visible === false) return false;
-  // Do NOT trust sticky `transform.axis` — it can stay set after hover and block all selection
   setPointer(e);
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObject(root, true);
-  for (const h of hits) {
+  return hits.some((h) => {
     let o = h.object;
     while (o) {
-      // Picker meshes + visible gizmo handles
+      if (o.userData?.handle) return true;
+      if (o.name === 'bodyPick') return true;
       if (o.parent && (o.parent.name === 'picker' || o.parent.name === 'gizmo')) return true;
       if (o.name === 'X' || o.name === 'Y' || o.name === 'Z' || o.name === 'E'
         || o.name === 'XY' || o.name === 'YZ' || o.name === 'XZ') return true;
       o = o.parent;
     }
-  }
-  return false;
+    return false;
+  });
 }
 function hitSelectable(e) {
   setPointer(e);
@@ -5475,32 +6143,64 @@ if (hotbarTrack && hotbarRail) {
 }
 const ghost = document.getElementById('drag-ghost');
 let dropping = false;
-/** Hotbar press — click selects tool; drag starts place ghost */
+/** Hotbar press — first click selects; drag out places; double-click deselects */
 let hotbarPress = null;
+let lastHotbarSlotClick = null;
+
+function deselectHotbarPreset() {
+  state.selectedPreset = null;
+  document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
+  if (state.mode === 'sculpt' || state.mode === 'ground') setMode('build');
+  document.getElementById('props-content').innerHTML =
+    '<div class="prop-empty">選取島上靈物或地形印記以編輯。</div>';
+  document.getElementById('panel-right').classList.add('hidden');
+}
 
 function selectHotbarPreset(pr) {
   document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
-  // Click same slot again to clear placement tool
-  if (state.selectedPreset === pr.type && !pr.paint && !pr.terrain) {
-    state.selectedPreset = null;
-    document.getElementById('props-content').innerHTML =
-      '<div class="prop-empty">選取島上靈物或地形印記以編輯。</div>';
-    document.getElementById('panel-right').classList.add('hidden');
-    return;
-  }
   const slot = hotbarTrack.querySelector(`.slot[data-type="${pr.type}"]`);
   if (slot) slot.classList.add('selected');
   state.selectedPreset = pr.type;
-  if (pr.paint) {
-    activatePaintTool(pr.paint);
+  if (pr.paint === 'sculpt') {
+    activateSculptPreset(pr);
     return;
   }
-  if (pr.terrain) return;
+  if (pr.paint === 'ground') {
+    activatePaintTool('ground');
+    return;
+  }
+  if (pr.terrain) {
+    renderPlaceToolProps(pr.type);
+    return;
+  }
   if (FACTORIES[pr.type]) renderPlaceToolProps(pr.type);
 }
 
+function activateSculptPreset(pr) {
+  state.sculptMode = pr.sculptMode || 'mountain';
+  state.brush.fillWater = state.sculptMode === 'water_hole';
+  setMode('sculpt');
+  renderPaintToolProps('sculpt');
+  rebuildHotbarSlots();
+  const tips = {
+    mountain: '塑山 · 拖曳抬升 · Shift 下壓 · ⌘Z 可逐步復原',
+    hole: '塑穴 · 拖曳下挖 · ⌘Z 可逐步復原',
+    water_hole: '塑水穴 · 拖曳下挖並注水 · ⌘Z 可逐步復原',
+  };
+  toast(tips[state.sculptMode] || tips.mountain);
+}
+
 function beginHotbarDrag(type, clientX, clientY) {
-  if (!FACTORIES[type]) return;
+  const pr = PRESETS.find((p) => p.type === type);
+  if (!pr && !FACTORIES[type]) return;
+  if (pr?.paint === 'sculpt') {
+    activateSculptPreset(pr);
+    return;
+  }
+  if (pr?.paint === 'ground') {
+    activatePaintTool('ground');
+    return;
+  }
   state.dragType = type;
   dropping = true;
   ghost.innerHTML = '';
@@ -5549,6 +6249,24 @@ function makeTerrainThumbMesh(type) {
     const m = new THREE.Mesh(new THREE.ConeGeometry(1.0, 1.8, 7), _thumbLam(0x8a8e78));
     m.position.y = 0.9;
     g.add(m);
+  } else if (type === 'sculpt_mountain' || type === 'sculpt_hole' || type === 'sculpt_water') {
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.15, 0.2, 10), _thumbLam(0x6a7058));
+    base.position.y = 0.05;
+    g.add(base);
+    if (type === 'sculpt_mountain') {
+      const bump = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 6), _thumbLam(0x8a8670));
+      bump.position.y = 0.45;
+      g.add(bump);
+    } else {
+      const pit = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.65, 0.35, 8), _thumbLam(0x3a4840));
+      pit.position.y = -0.05;
+      g.add(pit);
+      if (type === 'sculpt_water') {
+        const water = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.06, 8), _thumbLam(0x4a6a68));
+        water.position.y = -0.12;
+        g.add(water);
+      }
+    }
   } else if (type === 'sculpt') {
     const base = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.15, 0.2, 10), _thumbLam(0x6a7058));
     base.position.y = 0.05;
@@ -5603,7 +6321,9 @@ function renderThumb(type) {
   }
 
   let mesh;
-  if (type === 'mountain' || type === 'hole' || type === 'island' || type === 'sculpt' || type === 'path') {
+  if (type === 'mountain' || type === 'hole' || type === 'island'
+    || type === 'sculpt' || type === 'sculpt_mountain' || type === 'sculpt_hole' || type === 'sculpt_water'
+    || type === 'path') {
     mesh = makeTerrainThumbMesh(type);
   } else if (FACTORIES[type]) {
     mesh = FACTORIES[type]({ ...DEFAULT_PROPS[type] });
@@ -5679,6 +6399,24 @@ function presetsForTab(tabId) {
 }
 
 function setHotbarTab(tabId) {
+  if (tabId === state.hotbarTab) return;
+  const prevTab = state.hotbarTab;
+  if (prevTab === 'sculpt' && tabId !== 'sculpt') {
+    commitSculptSession({ silent: true });
+    const pr = PRESETS.find((p) => p.type === state.selectedPreset);
+    if (pr?.paint === 'sculpt' || state.mode === 'sculpt') {
+      state.selectedPreset = null;
+      if (state.mode === 'sculpt') setMode('build');
+    }
+  }
+  if (prevTab === 'terrain' && tabId !== 'terrain') {
+    commitGroundSession({ silent: true });
+    const pr = PRESETS.find((p) => p.type === state.selectedPreset);
+    if (pr?.paint === 'ground' || state.mode === 'ground') {
+      state.selectedPreset = null;
+      if (state.mode === 'ground') setMode('build');
+    }
+  }
   state.hotbarTab = tabId;
   hotbarTabsEl.querySelectorAll('.tab').forEach((b) => {
     b.classList.toggle('active', b.dataset.tab === tabId);
@@ -5694,8 +6432,8 @@ function rebuildHotbarSlots() {
     slot.className = 'slot';
     slot.dataset.type = pr.type;
     slot.title = pr.paint
-      ? (pr.paint === 'sculpt' ? '塑形筆 · 點選後在島上拖曳' : '地表路 · 點選後在島上繪路')
-      : pr.label;
+      ? (pr.paint === 'sculpt' ? `${pr.label} · 點選後在島上拖曳` : '地表路 · 點選後在島上繪路')
+      : `${pr.label} · 點一下選取 · 再點地形放置 · 拖出可直接放`;
     const thumb = ensureThumb(pr.type);
     // Clone canvas so each slot owns a copy
     const c = document.createElement('canvas');
@@ -5708,42 +6446,18 @@ function rebuildHotbarSlots() {
     slot.appendChild(c);
     slot.appendChild(name);
     slot.addEventListener('pointerdown', (e) => {
-      if (pr.paint) {
-        e.preventDefault();
-        activatePaintTool(pr.paint);
-        return;
-      }
-      if (state.mode === 'sculpt' || state.mode === 'ground') {
-        flushPendingPaintSessions();
-        setMode('build');
-      }
-      if (state.mode !== 'build') return;
+      if (state.mode !== 'build' && state.mode !== 'sculpt' && state.mode !== 'ground') return;
       e.preventDefault();
-      selectHotbarPreset(pr);
-      if (pr.terrain) {
-        // terrain still uses drag-place
-        state.dragType = pr.type;
-        dropping = true;
-        ghost.innerHTML = '';
-        const gImg = document.createElement('img');
-        gImg.src = c.toDataURL('image/png');
-        gImg.style.width = '48px';
-        gImg.style.height = '48px';
-        ghost.appendChild(gImg);
-        ghost.style.display = 'block';
-        ghost.style.left = e.clientX + 'px';
-        ghost.style.top = e.clientY + 'px';
-        return;
-      }
-      // Objects: click = select tool; drag a bit = place ghost
+      e.stopPropagation();
       hotbarPress = {
         type: pr.type,
+        preset: pr,
         x: e.clientX,
         y: e.clientY,
         id: e.pointerId,
       };
     });
-    const paintActive = (pr.paint === 'sculpt' && state.mode === 'sculpt')
+    const paintActive = (pr.paint === 'sculpt' && state.mode === 'sculpt' && state.selectedPreset === pr.type)
       || (pr.paint === 'ground' && state.mode === 'ground');
     if (state.selectedPreset === pr.type || paintActive) slot.classList.add('selected');
     hotbarTrack.appendChild(slot);
@@ -5756,30 +6470,35 @@ window.addEventListener('resize', () => requestAnimationFrame(syncHotbarRailSize
 function renderPaintToolProps(kind) {
   const el = document.getElementById('props-content');
   if (kind === 'sculpt') {
-    state.brush.size = Math.min(10, Math.max(0.2, state.brush.size || 0.5));
+    state.brush.size = Math.min(10, Math.max(0.2, state.brush.size || 5));
     if (!state.brush.colorLow) state.brush.colorLow = '#5a8a4a';
     if (!state.brush.colorMid) state.brush.colorMid = '#3d6b35';
     if (!state.brush.colorHigh) state.brush.colorHigh = '#8aaa68';
-    // Migrate old single tintColor → mid band
     if (state.brush.tintColor && state.brush.colorMid === '#3d6b35') {
       state.brush.colorMid = state.brush.tintColor;
     }
+    const mode = state.sculptMode || 'mountain';
+    const modeLabel = mode === 'mountain' ? '塑山' : mode === 'hole' ? '塑穴' : '塑水穴';
+    const modeHint = mode === 'mountain'
+      ? '拖曳抬升 · Shift 下壓'
+      : mode === 'hole' ? '拖曳下挖' : '拖曳下挖 · 自動注水';
     el.innerHTML = `
-      <div class="section"><h3>塑形筆</h3>
-        <p style="font-size:0.72rem;color:#8a8070;line-height:1.4;margin-bottom:8px">格點 0.25 · 可連續抬升／Shift 下壓 · 按「完成」才寫入清單 · 塗山色與「山」相同</p>
+      <div class="section"><h3>手動塑形 · ${modeLabel}</h3>
+        <p style="font-size:0.72rem;color:#8a8070;line-height:1.4;margin-bottom:8px">格點 0.25 · ${modeHint} · ⌘Z 復原每一步 · 按「完成」寫入清單</p>
         <div class="ctrl"><label>大小 Size <span class="val" id="v-brushSize">${state.brush.size}</span></label>
           <input type="range" id="brushSize" min="0.2" max="10" step="0.1" value="${state.brush.size}"/></div>
         <div class="ctrl"><label>力度 Strength <span class="val" id="v-brushStr">${state.brush.strength}</span></label>
           <input type="range" id="brushStr" min="0.02" max="0.6" step="0.01" value="${state.brush.strength}"/></div>
+        ${mode === 'mountain' ? `
         <label class="check-row"><input type="checkbox" id="sculpt-tint" ${state.brush.tintEnabled ? 'checked' : ''}/> 塗山色</label>
         <div id="sculpt-tint-wrap" style="display:${state.brush.tintEnabled ? '' : 'none'}">
           <div class="ctrl"><label>山麓</label><input type="color" id="sculpt-color-low" value="${state.brush.colorLow}"/></div>
           <div class="ctrl"><label>山腹</label><input type="color" id="sculpt-color-mid" value="${state.brush.colorMid}"/></div>
           <div class="ctrl"><label>山頂</label><input type="color" id="sculpt-color-high" value="${state.brush.colorHigh}"/></div>
-        </div>
-        <label class="check-row"><input type="checkbox" id="sculpt-fill-water" ${state.brush.fillWater ? 'checked' : ''}/> 下挖注水</label>
-        <div class="ctrl" id="sculpt-water-color-wrap" style="display:${state.brush.fillWater ? '' : 'none'}"><label>水色</label>
-          <input type="color" id="sculpt-water-color" value="${state.brush.waterColor || '#4a6a68'}"/></div>
+        </div>` : ''}
+        ${mode === 'water_hole' ? `
+        <div class="ctrl"><label>水色</label>
+          <input type="color" id="sculpt-water-color" value="${state.brush.waterColor || '#4a6a68'}"/></div>` : ''}
         <div class="row-btns" style="margin-top:10px">
           <button type="button" class="hud-btn" id="btn-sculpt-done" style="flex:1">✓ 完成</button>
           <button type="button" class="hud-btn" id="btn-sculpt-discard" style="flex:1">捨棄</button>
@@ -5794,13 +6513,18 @@ function renderPaintToolProps(kind) {
       state.brush.strength = parseFloat(e.target.value);
       el.querySelector('#v-brushStr').textContent = state.brush.strength;
     });
-    el.querySelector('#sculpt-tint').addEventListener('change', (e) => {
-      state.brush.tintEnabled = e.target.checked;
-      el.querySelector('#sculpt-tint-wrap').style.display = e.target.checked ? '' : 'none';
-      rebuildFeatureTint();
-    });
+    const tintEl = el.querySelector('#sculpt-tint');
+    if (tintEl) {
+      tintEl.addEventListener('change', (e) => {
+        state.brush.tintEnabled = e.target.checked;
+        el.querySelector('#sculpt-tint-wrap').style.display = e.target.checked ? '' : 'none';
+        rebuildFeatureTint();
+      });
+    }
     const bindBrushCol = (id, key) => {
-      el.querySelector(id).addEventListener('input', (e) => {
+      const node = el.querySelector(id);
+      if (!node) return;
+      node.addEventListener('input', (e) => {
         state.brush[key] = e.target.value;
         rebuildFeatureTint();
       });
@@ -5808,13 +6532,10 @@ function renderPaintToolProps(kind) {
     bindBrushCol('#sculpt-color-low', 'colorLow');
     bindBrushCol('#sculpt-color-mid', 'colorMid');
     bindBrushCol('#sculpt-color-high', 'colorHigh');
-    el.querySelector('#sculpt-fill-water').addEventListener('change', (e) => {
-      state.brush.fillWater = e.target.checked;
-      el.querySelector('#sculpt-water-color-wrap').style.display = e.target.checked ? '' : 'none';
-    });
-    el.querySelector('#sculpt-water-color').addEventListener('input', (e) => {
-      state.brush.waterColor = e.target.value;
-    });
+    const waterCol = el.querySelector('#sculpt-water-color');
+    if (waterCol) {
+      waterCol.addEventListener('input', (e) => { state.brush.waterColor = e.target.value; });
+    }
     el.querySelector('#btn-sculpt-done').addEventListener('click', () => commitSculptSession());
     el.querySelector('#btn-sculpt-discard').addEventListener('click', () => discardSculptSession());
   } else {
@@ -5868,10 +6589,20 @@ function renderPaintToolProps(kind) {
 }
 
 function activatePaintTool(kind) {
-  const mode = kind === 'sculpt' ? 'sculpt' : 'ground';
-  state.selectedPreset = kind === 'sculpt' ? 'sculpt' : 'path';
+  if (kind === 'sculpt') {
+    const pr = PRESETS.find((p) => p.type === state.selectedPreset && p.paint === 'sculpt')
+      || PRESETS.find((p) => p.tab === 'sculpt' && p.sculptMode === 'mountain');
+    activateSculptPreset(pr);
+    return;
+  }
+  const mode = 'ground';
+  state.selectedPreset = 'path';
   setMode(mode);
-  toast(kind === 'sculpt' ? '塑形筆 · 拖曳抬升，Shift 下壓 · 完成後才成物件' : '地表路 · 繪製後按完成才成物件');
+  toast('地表路 · 繪製後按完成才成物件');
+}
+
+function isHotbarEvent(e) {
+  return !!e.target.closest('#hotbar-wrap');
 }
 
 window.addEventListener('pointermove', (e) => {
@@ -5881,6 +6612,7 @@ window.addEventListener('pointermove', (e) => {
     if (dx * dx + dy * dy > 36) {
       beginHotbarDrag(hotbarPress.type, e.clientX, e.clientY);
       hotbarPress = null;
+      lastHotbarSlotClick = null;
     }
   }
   if (!dropping) return;
@@ -5903,8 +6635,12 @@ function clearPlacementTool() {
 
 function placeAt(type, point) {
   const preset = PRESETS.find((p) => p.type === type);
-  if (preset?.paint) {
-    activatePaintTool(preset.paint);
+  if (preset?.paint === 'sculpt') {
+    activateSculptPreset(preset);
+    return;
+  }
+  if (preset?.paint === 'ground') {
+    activatePaintTool('ground');
     return;
   }
   if (preset?.terrain) {
@@ -5931,8 +6667,21 @@ function placeAt(type, point) {
 }
 
 window.addEventListener('pointerup', (e) => {
-  if (hotbarPress && e.pointerId === hotbarPress.id) {
-    hotbarPress = null; // click-select only — place on terrain click
+  if (hotbarPress && e.pointerId === hotbarPress.id && !dropping) {
+    const dx = e.clientX - hotbarPress.x;
+    const dy = e.clientY - hotbarPress.y;
+    if (dx * dx + dy * dy <= 36) {
+      const pr = hotbarPress.preset;
+      const now = Date.now();
+      if (lastHotbarSlotClick && lastHotbarSlotClick.type === pr.type && now - lastHotbarSlotClick.time < 450) {
+        deselectHotbarPreset();
+        lastHotbarSlotClick = null;
+      } else {
+        selectHotbarPreset(pr);
+        lastHotbarSlotClick = { type: pr.type, time: now };
+      }
+    }
+    hotbarPress = null;
   }
   if (!dropping) return;
   dropping = false;
@@ -5956,8 +6705,8 @@ canvas.addEventListener('pointerdown', (e) => {
     const hit = hitTerrain(e);
     if (!hit) return;
     state.sculpting = true;
-    // Lock raise/dig for the whole stroke (Shift = dig)
-    state.sculptRaise = !e.shiftKey;
+    const mode = state.sculptMode || 'mountain';
+    state.sculptRaise = mode === 'mountain' ? !e.shiftKey : false;
     if (!state.sessionDelta) state.sessionDelta = emptyMap(0);
     orbit.enabled = false;
     sculptAt(hit.point.x, hit.point.z, state.sculptRaise);
@@ -5987,6 +6736,108 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 
+/** Capture-phase: arm XZ-drag on unselected objects (even when island/feature gizmo is active). */
+canvas.addEventListener('pointerdown', (e) => {
+  if (state.mode !== 'build' || e.button !== 0 || dropping || transform.dragging) return;
+  if (freeBodyDrag) return;
+
+  const obj = hitSelectable(e);
+  if (!obj) return;
+  if (obj === state.selectedObj || obj === transform.object) return;
+  if (getSelectionLocked()) return;
+
+  const planeY = obj.position.y;
+  const hit = hitXZPlaneAt(e, planeY);
+  if (!hit) return;
+
+  freeBodyDrag = {
+    mesh: obj,
+    pointerId: e.pointerId,
+    x0: e.clientX,
+    y0: e.clientY,
+    planeY,
+    grabX: obj.position.x - hit.x,
+    grabZ: obj.position.z - hit.z,
+    startPos: obj.position.clone(),
+    yOffset: obj.position.y - terrainAnchorY(obj, obj.position.x, obj.position.z),
+    startAABB: null,
+    moved: false,
+    ghostRoot: null,
+  };
+  orbit.enabled = false;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+}, true);
+
+window.addEventListener('pointermove', (e) => {
+  if (!freeBodyDrag || e.pointerId !== freeBodyDrag.pointerId) return;
+  const fd = freeBodyDrag;
+  const dx = e.clientX - fd.x0;
+  const dy = e.clientY - fd.y0;
+  if (!fd.moved && dx * dx + dy * dy < 25) return;
+
+  if (!fd.moved) {
+    fd.moved = true;
+    fd.startAABB = measureObjectWorldAABB(fd.mesh);
+    transformDragging = true;
+    buildSelectSuppress = true;
+  }
+
+  const hit = hitXZPlaneAt(e, fd.planeY);
+  if (hit) {
+    let x = hit.x + fd.grabX;
+    let z = hit.z + fd.grabZ;
+    if (state.snap) {
+      x = Math.round(x / SNAP) * SNAP;
+      z = Math.round(z / SNAP) * SNAP;
+    }
+    fd.mesh.position.x = x;
+    fd.mesh.position.z = z;
+    stickObjectYToTerrain(fd.mesh, fd.yOffset ?? 0);
+  }
+  updateFreeDragGhost(fd);
+  e.preventDefault();
+}, true);
+
+function endFreeBodyDrag(e) {
+  if (!freeBodyDrag || (e && e.pointerId !== freeBodyDrag.pointerId)) return;
+  const fd = freeBodyDrag;
+  freeBodyDrag = null;
+  hideFreeDragGhost(fd);
+  orbit.enabled = !transform.dragging;
+  transformDragging = !!transform.dragging;
+
+  if (!fd.moved) {
+    // Click — normal buildSelectPointer / handleBuildSelectClick path selects the object
+    return;
+  }
+
+  buildSelectSuppress = true;
+  const mesh = fd.mesh;
+  const entry = state.objects.find((o) => o.mesh === mesh);
+  const before = {
+    kind: 'object',
+    id: entry?.id,
+    position: fd.startPos.toArray(),
+    rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
+    scale: mesh.scale.toArray(),
+  };
+  if (isMob(mesh.userData?.type)) setMobHome(mesh, mesh.position.x, mesh.position.z);
+  if (entry) syncObjectTransformProps(entry);
+  if (mesh.userData?.type === 'water') rebuildCompositeHeightMap();
+  selectObject(mesh);
+  const after = snapshotXformForUndo();
+  if (entry && before.id != null && after && xformSnapChanged(before, after)) {
+    pushCmd({
+      undo: () => applyXformUndoSnap(before),
+      redo: () => applyXformUndoSnap(after),
+    });
+  }
+}
+
+window.addEventListener('pointerup', endFreeBodyDrag, true);
+window.addEventListener('pointercancel', endFreeBodyDrag, true);
+
 /** Click-select in build mode (pointerup) — avoids fighting oversized gizmo pickers */
 function handleBuildSelectClick(e) {
   if (state.mode !== 'build') return;
@@ -6006,22 +6857,28 @@ function handleBuildSelectClick(e) {
 
   const hit = hitTerrain(e);
   if (hit) {
-    // Place selected hotbar object
+    // Second click outside hotbar — place armed preset
     const placeType = state.selectedPreset;
     const placePreset = placeType ? PRESETS.find((p) => p.type === placeType) : null;
-    if (
-      placeType
-      && FACTORIES[placeType]
-      && placePreset
-      && !placePreset.terrain
-      && !placePreset.paint
-    ) {
-      placeAt(placeType, hit.point);
-      return;
+    if (placeType && placePreset && !placePreset.paint && !isHotbarEvent(e)) {
+      if (placePreset.terrain || FACTORIES[placeType]) {
+        placeAt(placeType, hit.point);
+        return;
+      }
     }
 
     const sx = hit.point.x, sz = hit.point.z;
-    // 2) Island / mountain / hole
+    // Prefer sculpted paint over island/feature footprints (塑形 山 lives on the island)
+    const sculpt = findSculptLayerAt(sx, sz);
+    if (sculpt) {
+      if (!wantsAdditive(e) && selectedSculptId === sculpt.id && state.multi.length <= 1) {
+        deselectAll();
+        return;
+      }
+      selectPaintLayer('sculpt', sculpt.id);
+      return;
+    }
+    // Island / mountain / hole stamps
     const f = findFeatureAt(sx, sz);
     if (f) {
       if (!wantsAdditive(e) && state.selectedFeature?.id === f.id && state.multi.length <= 1) {
@@ -6029,12 +6886,6 @@ function handleBuildSelectClick(e) {
         return;
       }
       selectFeature(f, { additive: wantsAdditive(e) });
-      return;
-    }
-    // 3) Paint layers (only off feature footprints)
-    const sculpt = findSculptLayerAt(sx, sz);
-    if (sculpt) {
-      selectPaintLayer('sculpt', sculpt.id);
       return;
     }
     const ground = findGroundLayerAt(sx, sz);
@@ -6070,6 +6921,9 @@ function cloneMap(m) { return m.map((r) => r.slice()); }
 
 function sculptAt(wx, wz, raise) {
   if (!state.sessionDelta) state.sessionDelta = emptyMap(0);
+  sessionSculptUndo.push(cloneMap(state.sessionDelta));
+  if (sessionSculptUndo.length > history.max) sessionSculptUndo.shift();
+  updateUndoButtons();
   const delta = state.sessionDelta;
   const size = state.brush.size;
   const str = state.brush.strength * (raise ? 1 : -1);
@@ -6116,7 +6970,7 @@ function commitSculptSession(opts = {}) {
     if (!opts.silent) toast('沒有可完成的塑形');
     return false;
   }
-  const dug = state.brush.fillWater && mapHasContent(
+  const dug = (state.sculptMode === 'water_hole' || state.brush.fillWater) && mapHasContent(
     state.sessionDelta.map((row) => row.map((h) => (h < -0.05 ? h : 0)))
   );
   const delta = cloneMap(state.sessionDelta);
@@ -6139,6 +6993,8 @@ function commitSculptSession(opts = {}) {
   };
   state.sculptLayers.push(layer);
   state.sessionDelta = null;
+  sessionSculptUndo.length = 0;
+  updateUndoButtons();
   rebuildCompositeHeightMap();
   refreshSculptLayerList();
   refreshGroundLayerList();
@@ -6173,6 +7029,8 @@ function commitSculptSession(opts = {}) {
 function discardSculptSession() {
   if (!state.sessionDelta) return;
   state.sessionDelta = null;
+  sessionSculptUndo.length = 0;
+  updateUndoButtons();
   rebuildCompositeHeightMap();
   updateSculptPendingUI();
   toast('已捨棄塑形');
@@ -6417,6 +7275,7 @@ function setMode(mode) {
   }
   transform.enabled = mode === 'build';
   if (mode !== 'build') transform.getHelper().visible = false;
+  syncEditGridVisibility();
 
   // Keep hotbar visible for paint tools (they live in 地形欄 now)
   const wrap = document.getElementById('hotbar-wrap');
@@ -6501,7 +7360,57 @@ function syncIslandColorInputs() {
 document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);
 
-// Unified transform toolbar (移 / 轉 / 縮 / 落地 / 鎖 / 刪)
+/** Frame orbit camera on the current selection (or island center) */
+function focusCameraOnSelection() {
+  const box = new THREE.Box3();
+  let has = false;
+  if (state.selectedObj) {
+    box.setFromObject(state.selectedObj);
+    has = !box.isEmpty();
+  } else if (state.selectedFeature) {
+    const f = state.selectedFeature;
+    const hw = (f.props.baseWidth || 10) * 0.5;
+    const hl = (f.props.baseLength || 10) * 0.5;
+    const hh = (f.type === 'hole' ? f.props.depth : f.props.height) || 2;
+    const y0 = sampleHeight(f.x, f.z);
+    box.set(
+      new THREE.Vector3(f.x - hw, y0, f.z - hl),
+      new THREE.Vector3(f.x + hw, y0 + hh, f.z + hl),
+    );
+    has = true;
+  } else if (selectedGroupId) {
+    const g = state.groups.find((x) => x.id === selectedGroupId);
+    if (g) {
+      g.members.forEach((m) => {
+        if (m.kind !== 'object') return;
+        const o = state.objects.find((x) => x.id === m.id);
+        if (o?.mesh) { box.expandByObject(o.mesh); has = true; }
+      });
+    }
+  } else if (transform.object) {
+    box.setFromObject(transform.object);
+    has = !box.isEmpty();
+  }
+  if (!has) {
+    box.set(new THREE.Vector3(-20, 0, -20), new THREE.Vector3(20, 8, 20));
+  }
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+  const radius = Math.max(size.length() * 0.5, 2);
+  orbit.target.copy(center);
+  let dir = camera.position.clone().sub(orbit.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0.65, 0.55, 0.7);
+  dir.normalize();
+  const dist = Math.max(6, radius * 2.4);
+  camera.position.copy(orbit.target).addScaledVector(dir, dist);
+  orbit.update();
+  toast('已聚焦選取');
+}
+document.getElementById('btn-focus').addEventListener('click', focusCameraOnSelection);
+
+// Transform actions (落地 / 鎖 / 刪) — move/rotate/scale are on-canvas gizmo handles
 document.getElementById('xform-bar').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-xform]');
   if (!btn) return;
@@ -6515,27 +7424,10 @@ document.getElementById('xform-bar').addEventListener('click', (e) => {
     toast('已鎖定 · 先按「解鎖」');
     return;
   }
-  if (action === 'translate' || action === 'rotate' || action === 'scale') {
-    state.xformMode = action;
-    transform.setMode(action);
-    transform.setSpace(action === 'scale' ? 'local' : 'world');
-    // Mountains / paint layers / groups: rotate around Y only; scale uses XYZ
-    const stampLike = !!(state.selectedFeature || selectedSculptId != null || selectedGroundId != null || selectedGroupId);
-    if (stampLike && action === 'rotate') {
-      transform.showX = false; transform.showY = true; transform.showZ = false;
-    } else if (selectedGroundId != null && action === 'scale') {
-      transform.showX = true; transform.showY = false; transform.showZ = true;
-    } else {
-      transform.showX = transform.showY = transform.showZ = true;
-    }
-    applyTransformForSelection();
-    showXformBar();
-    return;
-  }
   if (action === 'ground') {
     if (state.selectedObj) snapObjectToTerrain(state.selectedObj, { forceGround: true });
     if (state.selectedFeature) {
-      featureProxy.position.y = sampleHeight(state.selectedFeature.x, state.selectedFeature.z) + 0.15;
+      featureProxy.position.y = featureBaseY(state.selectedFeature) + 0.05;
     }
     if (selectedGroupId) {
       const g = state.groups.find((x) => x.id === selectedGroupId);
@@ -6656,6 +7548,77 @@ function syncObjectTransformProps(entry) {
     m.userData.props.rotationX = m.rotation.x;
     m.userData.props.rotationZ = m.rotation.z;
   }
+  if (entry.type === 'water') fixWaterBankScale(m);
+}
+
+function copySelectedObjectToClipboard() {
+  if (!state.selectedObj) {
+    toast('先選取要複製的物件');
+    return false;
+  }
+  const entry = state.objects.find((o) => o.mesh === state.selectedObj);
+  if (!entry) return false;
+  objectClipboard = serializeObject(entry);
+  toast(`已複製 · ${entry.name || entry.type}`);
+  return true;
+}
+
+/** Paste clipboard object at same height, slightly offset in XZ. */
+function pasteObjectFromClipboard() {
+  if (!objectClipboard) {
+    toast('剪貼簿是空的');
+    return null;
+  }
+  const snap = objectClipboard;
+  const props = { ...snap.props };
+  // Fresh wander home at the paste location
+  delete props.originX;
+  delete props.originZ;
+  delete props.originY;
+  const ox = (snap.position?.[0] ?? 0) + 1.5;
+  const oy = snap.position?.[1] ?? 0;
+  const oz = (snap.position?.[2] ?? 0) + 1.5;
+  const entry = createObject(snap.type, props, new THREE.Vector3(ox, oy, oz), { preserveY: true });
+  entry.mesh.position.set(ox, oy, oz);
+  if (Array.isArray(snap.scale) && snap.scale.length >= 3) {
+    entry.mesh.scale.set(+snap.scale[0] || 1, +snap.scale[1] || 1, +snap.scale[2] || 1);
+  }
+  if (Array.isArray(snap.rotation) && snap.rotation.length >= 3) {
+    entry.mesh.rotation.set(+snap.rotation[0] || 0, +snap.rotation[1] || 0, +snap.rotation[2] || 0);
+  } else if (typeof snap.props?.rotation === 'number') {
+    entry.mesh.rotation.y = snap.props.rotation;
+  }
+  syncObjectTransformProps(entry);
+  if (isMob(entry.type)) {
+    setMobHome(entry.mesh, ox, oz);
+    if (isFlyingMob(entry.type) || isSwimMob(entry.type)) {
+      const m = entry.mesh.userData.mob;
+      if (m) {
+        m.homeY = oy;
+        m.ty = oy;
+        entry.props.originY = oy;
+      }
+    }
+  }
+  if (snap.name) entry.name = allocName(snap.name, collectTakenNames());
+  selectObject(entry.mesh);
+  const saved = serializeObject(entry);
+  pushCmd({
+    undo: () => { const e2 = state.objects.find((o) => o.id === entry.id); if (e2) removeObject(e2); },
+    redo: () => {
+      const again = createObject(saved.type, { ...saved.props }, new THREE.Vector3(...saved.position), { preserveY: true });
+      again.mesh.scale.set(...saved.scale);
+      again.mesh.rotation.set(...saved.rotation);
+      syncObjectTransformProps(again);
+    },
+  });
+  toast(`已貼上 · ${entry.name || entry.type}`);
+  return entry;
+}
+
+function duplicateSelectedObject() {
+  if (!copySelectedObjectToClipboard()) return;
+  pasteObjectFromClipboard();
 }
 
 function applySavedObjectTransform(entry, o) {
@@ -6750,6 +7713,7 @@ function loadMap(data) {
   state.groups = [];
   state.sessionDelta = null;
   state.sessionGround = null;
+  sessionSculptUndo.length = 0;
   Object.assign(state.island, data.island);
   if (!state.island.colorLow) state.island.colorLow = '#7e8a6e';
   if (!state.island.colorMid) state.island.colorMid = '#5e6a54';
@@ -7069,6 +8033,11 @@ function applyGraphicsSettings(opts = {}) {
     : gfxPixelRatioCap();
   renderer.setPixelRatio(Math.min(devicePixelRatio, prCap));
 
+  // 極簡：freeze ambient motion so nothing is left mid-sway / mid-flap
+  if (!gfxAnimsOn()) {
+    freezeAmbientAnims();
+  }
+
   // Fog / draw feel
   if (ultra) {
     scene.fog.near = gfx.style === 'natural' ? 55 : 48;
@@ -7198,7 +8167,7 @@ document.getElementById('gfx-quality-seg')?.addEventListener('click', (e) => {
   saveGfxSettings();
   applyGraphicsSettings({ rebuildTerrain: false });
   const qToast = {
-    simple: '極簡渲染 · 陰影關閉',
+    simple: '極簡渲染 · 陰影與動畫關閉',
     normal: '正常渲染 · 柔和陰影',
     ultra: '極致渲染 · 最高畫質',
   };
@@ -7238,6 +8207,7 @@ const play = {
   announcedZones: null, // Set of mountain ids toasted this play session
   zoneInsideId: null,
 };
+syncEditGridVisibility();
 const playCamera = new THREE.PerspectiveCamera(75, 1, 0.08, 300);
 
 function matPlay(color, opts = {}) {
@@ -7729,6 +8699,7 @@ function enterPlay() {
   clearMobRadiusHelper();
   play.active = true;
   play.flying = false;
+  syncEditGridVisibility();
   // Wander radius stays centered on saved origin, not wherever the mob was mid-path
   state.objects.forEach((o) => {
     if (isMob(o.type)) applyMobOriginFromProps(o);
@@ -7805,6 +8776,7 @@ function exitPlay() {
   playCamera.far = 300;
   playCamera.updateProjectionMatrix();
   setMode('build');
+  syncEditGridVisibility();
   resize();
 }
 
@@ -7889,16 +8861,28 @@ window.addEventListener('keydown', (e) => {
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
   if (e.key === 'z' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   if (e.key === 'y' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); redo(); }
+  if ((e.key === 'c' || e.key === 'C') && (e.metaKey || e.ctrlKey) && !e.altKey) {
+    e.preventDefault();
+    copySelectedObjectToClipboard();
+  }
+  if ((e.key === 'v' || e.key === 'V') && (e.metaKey || e.ctrlKey) && !e.altKey) {
+    e.preventDefault();
+    pasteObjectFromClipboard();
+  }
+  if ((e.key === 'd' || e.key === 'D') && (e.metaKey || e.ctrlKey) && !e.altKey) {
+    e.preventDefault();
+    duplicateSelectedObject();
+  }
+  if ((e.key === 'f' || e.key === 'F') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    focusCameraOnSelection();
+  }
   if (e.key === 'Delete' || e.key === 'Backspace') document.getElementById('btn-delete')?.click();
   const num = parseInt(e.key, 10);
   const tabPresets = presetsForTab(state.hotbarTab);
   if (num >= 1 && num <= tabPresets.length) {
     const pr = tabPresets[num - 1];
-    const slot = hotbarTrack.querySelector(`.slot[data-type="${pr.type}"]`);
-    document.querySelectorAll('.slot').forEach((s) => s.classList.remove('selected'));
-    if (slot) slot.classList.add('selected');
-    state.selectedPreset = pr.type;
-    if (FACTORIES[pr.type] && !pr.terrain && !pr.paint) renderPlaceToolProps(pr.type);
+    selectHotbarPreset(pr);
   }
 });
 window.addEventListener('keyup', (e) => { if (state.mode === 'play') handlePlayKey(e, false); });
@@ -8283,46 +9267,101 @@ function hideBootScreen() {
 }
 
 let _plantAnimTick = 0;
-function animate() {
-  requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
-  waveT += dt;
-  ocean.position.y = SEA_LEVEL + Math.sin(waveT * 1.4) * 0.04;
-  _plantAnimTick++;
-
-  if (!play.active) {
-    updateMobs(dt);
-    // Skip plant sway every other frame when the island is dense
-    if ((_plantAnimTick & 1) === 0 || state.objects.length < 40) {
-      updatePlantAnims(state.objects, waveT);
+function freezeAmbientAnims() {
+  ocean.position.y = SEA_LEVEL;
+  state.objects.forEach((o) => {
+    if (isTreeType(o.type) || isFlowerType(o.type)) resetPlantPose(o.mesh);
+    if (o.type === 'water') {
+      const c = o.mesh?.userData?._waterSurf || o.mesh?.getObjectByName?.('waterSurf');
+      if (c) {
+        o.mesh.userData._waterSurf = c;
+        if (c.userData.baseY != null) c.position.y = c.userData.baseY;
+      }
+    } else if (o.type === 'firepit') {
+      const c = o.mesh?.userData?._flame || o.mesh?.getObjectByName?.('flame');
+      if (c) {
+        o.mesh.userData._flame = c;
+        c.scale.y = 1;
+      }
     }
-    for (const o of state.objects) {
-      if (o.type === 'water') {
-        const c = o.mesh?.userData?._waterSurf || o.mesh?.getObjectByName?.('waterSurf');
-        if (c) {
-          o.mesh.userData._waterSurf = c;
-          c.userData.baseY ??= c.position.y;
-          c.position.y = c.userData.baseY + Math.sin(waveT * 2 + o.id) * 0.03;
-        }
-      } else if (o.type === 'firepit') {
-        const c = o.mesh?.userData?._flame || o.mesh?.getObjectByName?.('flame');
-        if (c) {
-          o.mesh.userData._flame = c;
-          c.scale.y = 0.85 + Math.sin(waveT * 8 + o.id) * 0.15;
+    if (isMob(o.type) && o.mesh) {
+      const parts = ensureMobParts(o.mesh);
+      if (parts.wingL) parts.wingL.rotation.z = -0.15;
+      if (parts.wingR) parts.wingR.rotation.z = 0.15;
+      if (parts.armL) parts.armL.rotation.x = 0;
+      if (parts.armR) parts.armR.rotation.x = 0;
+      if (parts.tail) parts.tail.rotation.y = 0;
+      const m = o.mesh.userData.mob;
+      if (m) {
+        o.mesh.position.x = m.homeX;
+        o.mesh.position.z = m.homeZ;
+        if (isFlyingMob(o.type) || isSwimMob(o.type)) {
+          o.mesh.position.y = m.homeY ?? o.mesh.position.y;
+        } else {
+          o.mesh.position.y = sampleHeight(m.homeX, m.homeZ);
         }
       }
     }
-    holeWaterGroup.children.forEach((c, i) => {
-      c.userData.baseY ??= c.position.y;
-      c.position.y = c.userData.baseY + Math.sin(waveT * 2 + i) * 0.025;
-    });
+  });
+  holeWaterGroup.children.forEach((c) => {
+    if (c.userData.baseY != null) c.position.y = c.userData.baseY;
+  });
+  sculptWaterGroup?.children.forEach((c) => {
+    if (c.userData.baseY != null) c.position.y = c.userData.baseY;
+  });
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const anims = gfxAnimsOn();
+  if (anims) {
+    waveT += dt;
+    ocean.position.y = SEA_LEVEL + Math.sin(waveT * 1.4) * 0.04;
+  } else {
+    ocean.position.y = SEA_LEVEL;
+  }
+  _plantAnimTick++;
+
+  if (!play.active) {
+    if (anims) {
+      updateMobs(dt);
+      // Skip plant sway every other frame when the island is dense
+      if ((_plantAnimTick & 1) === 0 || state.objects.length < 40) {
+        updatePlantAnims(state.objects, waveT);
+      }
+      for (const o of state.objects) {
+        if (o.type === 'water') {
+          const c = o.mesh?.userData?._waterSurf || o.mesh?.getObjectByName?.('waterSurf');
+          if (c) {
+            o.mesh.userData._waterSurf = c;
+            c.userData.baseY ??= c.position.y;
+            c.position.y = c.userData.baseY + Math.sin(waveT * 2 + o.id) * 0.03;
+          }
+        } else if (o.type === 'firepit') {
+          const c = o.mesh?.userData?._flame || o.mesh?.getObjectByName?.('flame');
+          if (c) {
+            o.mesh.userData._flame = c;
+            c.scale.y = 0.85 + Math.sin(waveT * 8 + o.id) * 0.15;
+          }
+        }
+      }
+      holeWaterGroup.children.forEach((c, i) => {
+        c.userData.baseY ??= c.position.y;
+        c.position.y = c.userData.baseY + Math.sin(waveT * 2 + i) * 0.025;
+      });
+    }
+    if (transform.object && transform.getHelper().visible) transform.update();
     orbit.update();
+    syncEditGridLod();
     renderer.render(scene, camera);
   } else {
     updatePlay(dt);
-    updateMobs(dt);
-    if ((_plantAnimTick & 1) === 0 || state.objects.length < 40) {
-      updatePlantAnims(state.objects, waveT);
+    if (anims) {
+      updateMobs(dt);
+      if ((_plantAnimTick & 1) === 0 || state.objects.length < 40) {
+        updatePlantAnims(state.objects, waveT);
+      }
     }
     play._cullTick = (play._cullTick || 0) + 1;
     if ((play._cullTick % 4) === 0) updatePlayPropCull();

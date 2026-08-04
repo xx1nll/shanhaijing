@@ -1020,6 +1020,8 @@ export function installPlants(THREE, { mat, cprop, hash2 }) {
       if (!isTreeType(o.type) && !isFlowerType(o.type)) continue;
       const mesh = o.mesh;
       if (!mesh) continue;
+      // Host sets freezeAnim while selected so gizmo bounds stay put
+      if (mesh.userData?.freezeAnim) continue;
       const list = ensureAnimList(mesh);
       for (let i = 0; i < list.length; i++) {
         const node = list[i];

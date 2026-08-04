@@ -576,14 +576,11 @@ export function installStructures(THREE, { mat, cprop }) {
   ];
 
   const MYTH_META = [
-    { type: 'fusang', icon: '🌅', label: '扶桑', make: makeFusang, scale: 1, color: '#5a4030', color2: '#3a6040', accent: '#e8a030' },
-    { type: 'jianmu', icon: '🪵', label: '建木', make: makeJianmu, scale: 1, color: '#4a4538', color2: '#c8b070', accent: '#2a4a38' },
     { type: 'peach_altar', icon: '🍑', label: '蟠桃', make: makePeachAltar, scale: 1, color: '#7a7568', color2: '#e07060', accent: '#3a6040' },
     { type: 'ding', icon: '🍲', label: '鼎', make: makeDing, scale: 1, color: '#6a5a28', color2: '#3a3820', accent: '#6a5a28' },
     { type: 'bi_jade', icon: '🟢', label: '璧', make: makeBiJade, scale: 1, color: '#6aaa88', color2: '#5a5040', accent: '#6aaa88' },
     { type: 'spirit_gate', icon: '🚪', label: '神闕', make: makeSpiritGate, scale: 1, color: '#6a6860', color2: '#68a0c8', accent: '#68a0c8' },
     { type: 'lingzhi', icon: '🍄', label: '靈芝', make: makeLingzhi, scale: 1, color: '#d0c0a0', color2: '#c05040', accent: '#5a5548' },
-    { type: 'kunlun_jade', icon: '💎', label: '崑崙', make: makeKunlunJade, scale: 1, color: '#5a8878', color2: '#a8e0d0', accent: '#a8e0d0' },
     { type: 'feather_banner', icon: '🚩', label: '羽旌', make: makeFeatherBanner, scale: 1, color: '#5a4030', color2: '#c04040', accent: '#e8d080' },
     { type: 'bronze_mirror', icon: '🪞', label: '銅鏡', make: makeBronzeMirror, scale: 1, color: '#8a7a40', color2: '#c8d0d8', accent: '#5a5040' },
     { type: 'yao_stone', icon: '✨', label: '瑤石', make: makeYaoStone, scale: 1, color: '#4a5060', color2: '#70b0e0', accent: '#70b0e0' },
