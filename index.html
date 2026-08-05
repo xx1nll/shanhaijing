@@ -13,6 +13,17 @@
     }
   }
   </script>
+  <script>
+    window.__modStep = 'html';
+    window.addEventListener('error', (e) => {
+      window.__lastErr = String(e.message || e.error || e);
+      window.__modStep = 'error:' + window.__lastErr.slice(0, 120);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      window.__lastRej = String(e.reason?.stack || e.reason || e);
+      window.__modStep = 'reject:' + window.__lastRej.slice(0, 120);
+    });
+  </script>
   <style>
     :root {
       --jade: #4a6a5c;
@@ -679,7 +690,7 @@
     <h2 id="left-title">場景清單</h2>
     <div id="panel-sculpt" style="display:none">
       <div class="section">
-        <p style="font-size:0.75rem;color:#8a8070;line-height:1.45">塑形已移至下方地形欄「塑」。完成的圖層在清單中可選取、移動。</p>
+        <p style="font-size:0.75rem;color:#8a8070;line-height:1.45">塑形已移至下方欄「塑形」。完成的圖層在清單中可選取、移動。</p>
         <h3>已完成圖層</h3>
         <div id="sculpt-layers" class="layer-list">
           <div class="prop-empty" style="padding:8px 0">尚無完成的塑形</div>
@@ -763,11 +774,11 @@
       <p>調整陰影與畫風。遊歷與編輯共用。</p>
       <div class="setting-block">
         <h3>渲染品質</h3>
-        <div class="setting-hint">極簡最順（無陰影、無動畫）；正常有柔和陰影；極致為最高畫質（較耗效能）。</div>
+        <div class="setting-hint">基本／正常：簡化樹形（無寫實網格，較順）；真實：寫實林木＋風動（完整網格）。</div>
         <div class="seg" id="gfx-quality-seg">
-          <button type="button" class="hud-btn" data-quality="simple">極簡渲染</button>
-          <button type="button" class="hud-btn" data-quality="normal">正常渲染</button>
-          <button type="button" class="hud-btn" data-quality="ultra">極致渲染</button>
+          <button type="button" class="hud-btn" data-quality="simple">基本</button>
+          <button type="button" class="hud-btn" data-quality="normal">正常</button>
+          <button type="button" class="hud-btn" data-quality="ultra">真實</button>
         </div>
       </div>
       <div class="setting-block">
@@ -778,6 +789,13 @@
           <button type="button" class="hud-btn" data-style="hanmo">翰墨丹青</button>
           <button type="button" class="hud-btn" data-style="natural">自然寫實</button>
         </div>
+      </div>
+      <div class="setting-block">
+        <h3>除錯</h3>
+        <div class="setting-hint">顯示物件碰撞體線框（僅樹幹，不含樹冠）。</div>
+        <label class="check-row" style="margin-top:6px">
+          <input type="checkbox" id="gfx-show-hitbox" /> 顯示碰撞體
+        </label>
       </div>
       <div class="modal-actions">
         <button class="secondary" id="btn-gfx-close">完成</button>
@@ -795,16 +813,25 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { UnifiedTransformControls } from './unified-gizmo.js';
-import { installPlants } from './plants.js';
+import {
+  installPlants,
+  preloadRealTrees, preloadRemainingRealTrees, realTreesReady, realTreeReady,
+  setRealTreeQuality, REAL_TREE_SPECS,
+} from './plants.js?v=trees25';
 import { installStructures } from './structures.js';
+import { createArcherCharacter } from './archer-character.js';
 import { installAnimals } from './animals.js';
+
+window.__modStep = 'imports-ok';
 
 // ═══════════════════════════════════════════════════════════
 // Editable terrain — 0.25 world-units per cell (smooth paths / sculpt curves)
-const CELL = 0.25;
+// Editable terrain — 0.5 world-units/cell (faster sculpt; still smooth enough)
+const CELL = 0.5;
 const WORLD = 72;
-const SEG = Math.round(WORLD / CELL); // 288
+const SEG = Math.round(WORLD / CELL); // 144
 const SEA_LEVEL = 0.0;
 const OCEAN_SIZE = 400; // visual sea only (not the heightmap)
 const MAX_STEP = 1.1;
@@ -888,19 +915,26 @@ function bindNameField(root, onCommit) {
   });
 }
 
+/** FOR NOW — release hotbar: 塑形 + 樹木. Flip to false to restore all tabs. */
+const RELEASE_HOTBAR_ONLY = true;
+
 const HOTBAR_TABS = [
-  { id: 'sculpt',  label: '手動塑形' },
-  { id: 'terrain', label: '地形' },
-  { id: 'trees',   label: '木' },
-  { id: 'flowers', label: '草花' },
-  { id: 'beasts',  label: '獸' },
-  { id: 'birds',   label: '禽' },
-  { id: 'aqua',    label: '水族' },
-  { id: 'crawl',   label: '爬蟲' },
-  { id: 'decor',   label: '景物' },
-  { id: 'build',   label: '建築' },
-  { id: 'myth',    label: '神異' },
+  { id: 'sculpt',        label: '塑形',   release: true },
+  { id: 'terrain',       label: '地形',   release: false },
+  { id: 'trees',         label: '樹木',   release: true },
+  { id: 'flowers',       label: '草花',   release: false },
+  { id: 'beasts',        label: '獸',     release: false },
+  { id: 'birds',         label: '禽',     release: false },
+  { id: 'aqua',          label: '水族',   release: false },
+  { id: 'crawl',         label: '爬蟲',   release: false },
+  { id: 'decor',         label: '景物',   release: false },
+  { id: 'build',         label: '建築',   release: false },
+  { id: 'myth',          label: '神異',   release: false },
 ];
+
+function visibleHotbarTabs() {
+  return RELEASE_HOTBAR_ONLY ? HOTBAR_TABS.filter((t) => t.release) : HOTBAR_TABS;
+}
 
 const PRESETS = [
   { type: 'island',   icon: '🏝️', label: '島',  terrain: true,  tab: 'terrain' },
@@ -922,39 +956,38 @@ const PRESETS = [
   { type: 'nest',     icon: '🪺',  label: '巢',  terrain: false, tab: 'decor' },
 ];
 
-/** Biome / texture presets for placeable islands */
+/** Biome / texture presets for placeable islands — warmer sand / deeper greens to match real trees */
 const ISLAND_TEXTURES = {
   default: {
     label: '默認',
-    colorLow: '#7e8a6e', colorMid: '#5e6a54', colorHigh: '#b8b0a0', colorSand: '#a89878',
+    colorLow: '#4a5a38', colorMid: '#3a4a28', colorHigh: '#8a7a58', colorSand: '#b8a078',
   },
   grass: {
     label: '草地',
-    colorLow: '#5a8a4a', colorMid: '#3d6b35', colorHigh: '#8aaa68', colorSand: '#a09060',
+    colorLow: '#3a5530', colorMid: '#2a4a28', colorHigh: '#6a8050', colorSand: '#a89060',
   },
   sand: {
     label: '沙島',
-    colorLow: '#c4b088', colorMid: '#b09868', colorHigh: '#d8c8a0', colorSand: '#e8d8b0',
+    colorLow: '#c4a878', colorMid: '#b09868', colorHigh: '#d8c498', colorSand: '#e0d0a8',
   },
   snow: {
     label: '雪島',
-    colorLow: '#b8c4c8', colorMid: '#9aadb8', colorHigh: '#eef2f4', colorSand: '#d0c8b0',
+    colorLow: '#a8b4b8', colorMid: '#8a9aa4', colorHigh: '#eef2f4', colorSand: '#d0c8b0',
   },
 };
 
 const DEFAULT_PROPS = {
   // Mountains are landscape-scale; props are human/spirit-scale (much smaller)
   island: {
-    height: 0.55, baseWidth: 48, baseLength: 48, rotation: 0, crescent: 0.08,
-    roughness: 0.04, shape: 'round', texture: 'default',
-    colorLow: '#7e8a6e', colorMid: '#5e6a54', colorHigh: '#b8b0a0', colorSand: '#a89878',
+    height: 2.2, baseWidth: 48, baseLength: 48, rotation: 0, crescent: 0.18,
+    roughness: 0.28, shape: 'round', texture: 'default',
+    colorLow: '#4a5a38', colorMid: '#3a4a28', colorHigh: '#8a7a58', colorSand: '#b8a078',
   },
   mountain: {
     height: 12, baseWidth: 22, baseLength: 20, rotation: 0, steepness: 0.35, shape: 'ridge',
-    pathWidth: 1, // mesa spiral tread width in world units (1 block)
-    pathColor: '#a89868', // mesa spiral path tint
-    // Default green mountain (own gradient — not island colors)
-    colorLow: '#5a8a4a', colorMid: '#3d6b35', colorHigh: '#8aaa68',
+    pathWidth: 1,
+    pathColor: '#a89868',
+    colorLow: '#3a5530', colorMid: '#2a4a28', colorHigh: '#6a8050',
     announceOnEnter: false,
   },
   hole:     { depth: 3.2, baseWidth: 9, baseLength: 9, rotation: 0, steepness: 0.5, shape: 'round', fillWater: true, waterColor: '#5a7a72', waterLevel: 0.12 },
@@ -981,13 +1014,13 @@ let mobSpeed = () => 1;
 const GFX_KEY = 'shanhai-gfx';
 const GFX_QUALITY = new Set(['simple', 'normal', 'ultra']);
 function loadGfxSettings() {
-  let quality = 'normal';
+  let quality = 'ultra'; // 真實 — full GLB mesh; 正常/基本 — proxy
   let style = 'hanmo';
   try {
     const raw = localStorage.getItem(GFX_KEY);
     if (raw) {
       const o = JSON.parse(raw);
-      // Migrate old "detail" (細緻) → normal (正常)
+      // Migrate: detail→normal; keep simple/normal/ultra ids
       if (o.quality === 'detail') quality = 'normal';
       else if (GFX_QUALITY.has(o.quality)) quality = o.quality;
       if (o.style === 'shanshui' || o.style === 'hanmo' || o.style === 'natural') style = o.style;
@@ -996,6 +1029,7 @@ function loadGfxSettings() {
   return { quality, style };
 }
 const gfx = loadGfxSettings();
+setRealTreeQuality(gfx.quality);
 function saveGfxSettings() {
   try { localStorage.setItem(GFX_KEY, JSON.stringify({ quality: gfx.quality, style: gfx.style })); } catch { /* ignore */ }
 }
@@ -1005,19 +1039,20 @@ function gfxShadowsOn() {
 function gfxIsUltra() {
   return gfx.quality === 'ultra';
 }
-/** Ambient world motion (plants, water, fire, mob wander) — off in 極簡 */
+/** Ambient world motion (water, fire, mobs) — off in 基本. Tree wind is ultra-only. */
 function gfxAnimsOn() {
   return gfx.quality !== 'simple';
 }
 function gfxPixelRatioCap() {
-  if (gfx.quality === 'ultra') return 2;
-  if (gfx.quality === 'normal') return 1.5;
-  return 1.1;
+  // Cap DPR hard — fill rate + heavy trees
+  if (gfx.quality === 'ultra') return 1.15;
+  if (gfx.quality === 'normal') return 1;
+  return 0.85;
 }
 function gfxQualityLabel() {
-  if (gfx.quality === 'ultra') return '極致渲染';
-  if (gfx.quality === 'normal') return '正常渲染';
-  return '極簡渲染';
+  if (gfx.quality === 'ultra') return '真實';
+  if (gfx.quality === 'normal') return '正常';
+  return '基本';
 }
 
 const state = {
@@ -1032,7 +1067,7 @@ const state = {
   groups: [],                // [{ id, label, members: [{kind,id}] }]
   island: {
     height: 0.35, crescent: 0.05, width: 56, length: 56, roughness: 0.02,
-    colorLow: '#7e8a6e', colorMid: '#5e6a54', colorHigh: '#b8b0a0', colorSand: '#a89878',
+    colorLow: '#4a5a38', colorMid: '#3a4a28', colorHigh: '#8a7a58', colorSand: '#b8a078',
   },
   brush: {
     size: 5, strength: 0.22, fillWater: false, waterColor: '#4a6a68',
@@ -1052,7 +1087,7 @@ const state = {
   groundPainting: false,
   dragType: null,
   selectedPreset: null,
-  hotbarTab: 'terrain',
+  hotbarTab: 'sculpt',
   nextId: 1,
   showListPanel: false,
   xformMode: 'translate', // legacy; gizmo shows move+rotate+scale together
@@ -1099,10 +1134,10 @@ function updateUndoButtons() {
 // Scene
 // ═══════════════════════════════════════════════════════════
 const canvas = document.getElementById('viewport');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, gfxPixelRatioCap()));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.02;
@@ -1563,7 +1598,7 @@ scene.add(hemiLight);
 const sun = new THREE.DirectionalLight(0xfff0d8, 1.2);
 sun.position.set(38, 58, 26);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.04;
 sun.shadow.radius = 3.2;
@@ -1615,29 +1650,187 @@ let skyMat = null;
   }
 }
 
-// Visual sea only — heightmap / paths use WORLD × SEG (CELL-sized pixels)
+// Visual sea — depth-tinted water with foam + scrolling normals (matches real-tree world)
+const groundTexSize = SEG + 1;
+const heightData = new Uint8Array(groundTexSize * groundTexSize * 4);
+const heightTex = new THREE.DataTexture(heightData, groundTexSize, groundTexSize, THREE.RGBAFormat);
+heightTex.magFilter = THREE.LinearFilter;
+heightTex.minFilter = THREE.LinearFilter;
+heightTex.flipY = false;
+heightTex.needsUpdate = true;
+
+/** Encode world height into heightTex (call after heightmap updates). */
+function syncHeightTexture() {
+  const map = state.heightMap;
+  if (!map) return;
+  const n = groundTexSize;
+  for (let iy = 0; iy <= SEG; iy++) {
+    for (let ix = 0; ix <= SEG; ix++) {
+      const i = (iy * n + ix) * 4;
+      const h = map[iy][ix];
+      // Encode −8…42 → 0…1
+      const enc = Math.max(0, Math.min(1, (h + 8) / 50));
+      const v = Math.round(enc * 255);
+      heightData[i] = v;
+      heightData[i + 1] = v;
+      heightData[i + 2] = v;
+      heightData[i + 3] = 255;
+    }
+  }
+  heightTex.needsUpdate = true;
+}
+
+function decodeHeightSample(enc01) {
+  return enc01 * 50 - 8;
+}
+
+/** Procedural tiled normal map for sand/soil grit */
+function makeNoiseNormalMap(size = 128) {
+  const data = new Uint8Array(size * size * 4);
+  const hash = (x, y) => {
+    const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  const n2 = (x, y) => {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    const fx = x - ix, fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    return hash(ix, iy) + (hash(ix + 1, iy) - hash(ix, iy)) * ux
+      + (hash(ix, iy + 1) - hash(ix, iy)) * uy
+      + (hash(ix, iy) - hash(ix + 1, iy) - hash(ix, iy + 1) + hash(ix + 1, iy + 1)) * ux * uy;
+  };
+  const h = (x, y) => {
+    let v = 0, a = 0.5, px = x * 0.09, py = y * 0.09;
+    for (let i = 0; i < 4; i++) { v += a * n2(px, py); px *= 2; py *= 2; a *= 0.5; }
+    return v;
+  };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = 1.2;
+      const nL = h(x - d, y), nR = h(x + d, y), nD = h(x, y - d), nU = h(x, y + d);
+      let nx = (nL - nR) * 2.8;
+      let ny = (nD - nU) * 2.8;
+      let nz = 1.0;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= len; ny /= len; nz /= len;
+      const i = (y * size + x) * 4;
+      data[i] = Math.round((nx * 0.5 + 0.5) * 255);
+      data[i + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      data[i + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const terrainNormalMap = makeNoiseNormalMap(128);
+// RGBA — MeshStandardMaterial samples roughness from the G channel
+const terrainRoughData = new Uint8Array(groundTexSize * groundTexSize * 4);
+const terrainRoughTex = new THREE.DataTexture(
+  terrainRoughData, groundTexSize, groundTexSize, THREE.RGBAFormat,
+);
+terrainRoughTex.magFilter = THREE.LinearFilter;
+terrainRoughTex.minFilter = THREE.LinearFilter;
+terrainRoughTex.flipY = false;
+terrainRoughTex.needsUpdate = true;
+
+const oceanUniforms = {
+  uTime: { value: 0 },
+  uSeaLevel: { value: SEA_LEVEL },
+  uWorldSize: { value: WORLD },
+  uHeightMap: { value: heightTex },
+  uShallow: { value: new THREE.Color(0x6a9a88) },
+  uDeep: { value: new THREE.Color(0x2a5a68) },
+  uFoam: { value: new THREE.Color(0xd8e8e0) },
+  uOpacity: { value: 0.72 },
+};
+const oceanMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+  uniforms: oceanUniforms,
+  vertexShader: `
+    varying vec2 vUv;
+    varying vec3 vWorld;
+    void main() {
+      vUv = uv;
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorld = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime, uSeaLevel, uWorldSize, uOpacity;
+    uniform sampler2D uHeightMap;
+    uniform vec3 uShallow, uDeep, uFoam;
+    varying vec2 vUv;
+    varying vec3 vWorld;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash(i), b = hash(i + vec2(1.0, 0.0));
+      float c = hash(i + vec2(0.0, 1.0)), d = hash(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+    float fbm2(vec2 p) {
+      float v = 0.0, a = 0.5;
+      for (int i = 0; i < 4; i++) { v += a * noise(p); p *= 2.05; a *= 0.5; }
+      return v;
+    }
+
+    void main() {
+      // Heightmap UV: world xz → [0,1] matching mapIndexToWorld
+      vec2 hu = vWorld.xz / uWorldSize + 0.5;
+      float enc = texture2D(uHeightMap, clamp(hu, 0.001, 0.999)).r;
+      float terrainH = enc * 50.0 - 8.0;
+      float depth = uSeaLevel - terrainH;
+      float deepAmt = smoothstep(0.05, 2.8, depth);
+      vec3 col = mix(uShallow, uDeep, deepAmt);
+
+      vec2 nUv = vWorld.xz * 0.08 + vec2(uTime * 0.03, uTime * 0.02);
+      float n1 = fbm2(nUv);
+      float n2 = fbm2(nUv * 1.7 + 4.0);
+      vec3 N = normalize(vec3((n1 - 0.5) * 0.55, 1.0, (n2 - 0.5) * 0.55));
+      vec3 L = normalize(vec3(0.35, 0.85, 0.25));
+      float spec = pow(max(0.0, dot(N, L)), 28.0) * 0.35;
+      col += vec3(spec);
+
+      float foam = (1.0 - smoothstep(0.0, 0.45, depth)) * smoothstep(-0.35, 0.08, terrainH);
+      foam *= 0.55 + 0.45 * fbm2(vWorld.xz * 0.55 + uTime * 0.15);
+      col = mix(col, uFoam, clamp(foam, 0.0, 0.85));
+
+      float alpha = mix(0.45, uOpacity, smoothstep(-0.2, 0.6, depth));
+      alpha = max(alpha, foam * 0.55);
+      gl_FragColor = vec4(col, alpha);
+    }
+  `,
+});
+
 const ocean = new THREE.Mesh(
   new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, 1, 1).rotateX(-Math.PI / 2),
-  new THREE.MeshStandardMaterial({
-    color: 0x5a7a72,
-    transparent: true,
-    opacity: 0.58,
-    roughness: 0.62,
-    metalness: 0.04,
-    flatShading: false,
-    depthWrite: false,
-  })
+  oceanMat,
 );
 ocean.position.y = SEA_LEVEL;
 ocean.receiveShadow = true;
 ocean.renderOrder = 1;
 ocean.name = 'ocean';
+ocean.raycast = () => {}; // never steal terrain / object picks
 scene.add(ocean);
+window.__modStep = 'ocean-ok';
 
 // Terrain
 const terrainGeo = new THREE.PlaneGeometry(WORLD, WORLD, SEG, SEG);
 terrainGeo.rotateX(-Math.PI / 2);
-const groundTexSize = SEG + 1;
 const groundData = new Uint8Array(groundTexSize * groundTexSize * 4);
 const groundTex = new THREE.DataTexture(groundData, groundTexSize, groundTexSize, THREE.RGBAFormat);
 groundTex.magFilter = THREE.LinearFilter;
@@ -1652,15 +1845,26 @@ featureTintTex.minFilter = THREE.LinearFilter;
 featureTintTex.flipY = false;
 featureTintTex.needsUpdate = true;
 
-// Vertex colors + MeshStandardMaterial → real sun/fill/shadows, muted ash look
+// Vertex colors + roughness/normal maps — smooth real ground next to GLB trees
 const terrainColorAttr = new THREE.BufferAttribute(new Float32Array((SEG + 1) * (SEG + 1) * 3), 3);
 terrainGeo.setAttribute('color', terrainColorAttr);
 const terrainMat = new THREE.MeshStandardMaterial({
   vertexColors: true,
-  roughness: 0.93,
+  roughness: 1.0,
+  roughnessMap: terrainRoughTex,
   metalness: 0.0,
   flatShading: false,
+  normalMap: terrainNormalMap,
+  normalScale: new THREE.Vector2(0.22, 0.22),
 });
+terrainMat.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader.replace(
+    '#include <uv_vertex>',
+    `#include <uv_vertex>
+     vNormalMapUv = position.xz * 0.085 + 0.5;
+     vRoughnessMapUv = uv;`,
+  );
+};
 const terrain = new THREE.Mesh(terrainGeo, terrainMat);
 terrain.receiveShadow = true;
 terrain.castShadow = true;
@@ -1741,15 +1945,17 @@ function syncEditGridVisibility() {
   }
 }
 
-// Island palette used when baking vertex colors (was shader uniforms)
+// Island palette used when baking vertex colors — warmer sand / deeper greens (tree-matched)
 const terrainPalette = {
-  low: new THREE.Color(0x7e8a6e),
-  mid: new THREE.Color(0x5e6a54),
-  high: new THREE.Color(0xb8b0a0),
-  sand: new THREE.Color(0xa89878),
+  low: new THREE.Color(0x4a5a38),
+  mid: new THREE.Color(0x3a4a28),
+  high: new THREE.Color(0x8a7a58),
+  sand: new THREE.Color(0xb8a078),
+  sandWet: new THREE.Color(0x8a7050),
+  rockCool: new THREE.Color(0x5a6860),
   maxH: 28,
-  rock: new THREE.Color(0x7a8580),
-  desat: 0.08,
+  rock: new THREE.Color(0x6a7568),
+  desat: 0.04,
 };
 
 const brushCursor = new THREE.Mesh(
@@ -1876,10 +2082,12 @@ function islandStampHeight(feature, wx, wz) {
     const edge = 1 - r;
     const plateau = Math.pow(edge, 0.25);
     const n = fbm(wx * 0.08 + feature.id * 0.1, wz * 0.08) * 2 - 0.7;
-    let h = 0.12 + height * plateau * 0.9 + roughness * n * edge;
-    // subtle biome noise
+    let h = 0.12 + height * plateau * 0.9 + roughness * n * edge * 2.4;
+    // subtle biome noise + mid-freq hills so islands aren't pancake-flat
+    const hills = (fbm(wx * 0.22 + feature.id, wz * 0.22) - 0.45) * height * 0.35 * edge;
+    h += hills;
     if (p.texture === 'snow') h += fbm(wx * 0.2, wz * 0.2) * 0.04 * edge;
-    if (p.texture === 'grass') h += (fbm(wx * 0.35, wz * 0.35) - 0.5) * 0.06 * edge;
+    if (p.texture === 'grass') h += (fbm(wx * 0.35, wz * 0.35) - 0.5) * 0.08 * edge;
     return Math.max(0.06, h);
   }
   const t = 1 - (r - 1) / 0.14;
@@ -2407,6 +2615,11 @@ function rebuildFeatureTint() {
         } else if (p.texture === 'sand') {
           const dune = fbm(wx * 0.3, wz * 0.3);
           col.lerp(cSand, 0.35 + dune * 0.25);
+        } else {
+          const grit = fbm(wx * 0.9, wz * 0.9);
+          col.offsetHSL(0, 0, (grit - 0.5) * 0.05);
+          const wet = clamp01(1 - edge * 2.5) * smooth01(hStamp, -0.05, 0.35);
+          if (wet > 0.05) col.lerp(new THREE.Color(0x8a7050), wet * 0.4);
         }
         const a = Math.min(0.95, 0.55 + edge * 0.4);
         blend((iy * n + ix) * 4, col, a);
@@ -2449,20 +2662,20 @@ function rebuildFeatureTint() {
           w = mountainProfile(r);
         }
         if (w <= 0.02 && onPath <= 0.05) continue;
-        // Foot blends into island/surface color beneath, then climbs mountain greens
         const below = islandSurfaceColorAt(wx, wz);
         let col = below.clone();
         col.lerp(cLow, smooth01(w, 0.05, 0.28));
         col.lerp(cMid, smooth01(w, 0.22, 0.55));
         col.lerp(cHigh, smooth01(w, 0.5, 1.0));
-        // light mottling on upper slopes
         const mott = fbm(wx * 0.4 + feature.id, wz * 0.4);
-        col.lerp(cMid, (mott - 0.5) * 0.1 * smooth01(w, 0.35, 1));
-        // Spiral path color (臺 only) — only where onPath is clearly on the tread
+        const blot = fbm(wx * 0.85 + 2.1, wz * 0.85);
+        col.lerp(cMid, (mott - 0.5) * 0.14 * smooth01(w, 0.35, 1));
+        col.lerp(cLow, (blot - 0.5) * 0.1 * smooth01(w, 0.15, 0.7));
+        const rimCliff = smooth01(r, 0.55, 0.95) * smooth01(w, 0.2, 0.9);
+        if (rimCliff > 0.05) col.lerp(new THREE.Color(0x5a6860), rimCliff * 0.35);
         if (onPath > 0.12) {
           col.lerp(cPath, Math.min(0.88, onPath * 0.9));
         }
-        // Cover island beach under the mountain; paths still win via uGroundMap
         replace((iy * n + ix) * 4, col, Math.min(0.96, 0.5 + Math.max(w, onPath) * 0.48));
       }
     }
@@ -2525,7 +2738,7 @@ function smooth01(v, a, b) {
   return t * t * (3 - 2 * t);
 }
 
-/** Bake height + feature tint + ground paint into vertex colors (MeshStandardMaterial). */
+/** Bake height + feature tint + ground paint into vertex colors + roughness map. */
 function bakeTerrainVertexColors() {
   const map = state.heightMap;
   if (!map || !terrainColorAttr) return;
@@ -2533,6 +2746,8 @@ function bakeTerrainVertexColors() {
   const maxH = Math.max(4, terrainPalette.maxH);
   const rock = terrainPalette.rock;
   const sand = terrainPalette.sand;
+  const sandWet = terrainPalette.sandWet || sand;
+  const rockCool = terrainPalette.rockCool || rock;
   const low = terrainPalette.low;
   const mid = terrainPalette.mid;
   const high = terrainPalette.high;
@@ -2540,17 +2755,36 @@ function bakeTerrainVertexColors() {
   const tmp = new THREE.Color();
   const tint = new THREE.Color();
   const gnd = new THREE.Color();
+  const cell = WORLD / SEG;
   for (let iy = 0; iy <= SEG; iy++) {
     for (let ix = 0; ix <= SEG; ix++) {
       const i = iy * (SEG + 1) + ix;
       const h = map[iy][ix];
       const t = clamp01(h / maxH);
-      // Same muted bands as the old ink-wash shader
+      const { x: wx, z: wz } = mapIndexToWorld(ix, iy);
+
+      // Height bands → sand / soil / grass / rock
       tmp.copy(rock);
-      tmp.lerp(sand, smooth01(h, -0.5, 0.25));
-      tmp.lerp(low, smooth01(h, 0.2, 1.2));
-      tmp.lerp(mid, smooth01(t, 0.35, 0.7));
-      tmp.lerp(high, smooth01(t, 0.75, 1.0));
+      tmp.lerp(sand, smooth01(h, -0.5, 0.28));
+      tmp.lerp(low, smooth01(h, 0.18, 1.15));
+      tmp.lerp(mid, smooth01(t, 0.32, 0.68));
+      tmp.lerp(high, smooth01(t, 0.72, 1.0));
+
+      const wetAmt = (1 - smooth01(h, 0.02, 0.42)) * smooth01(h, -0.25, 0.15);
+      if (wetAmt > 0.01) tmp.lerp(sandWet, wetAmt * 0.55);
+
+      const mott = fbm(wx * 0.38 + 1.7, wz * 0.38);
+      const grit = fbm(wx * 1.1, wz * 1.1);
+      tmp.offsetHSL(0, 0, (mott - 0.5) * 0.04 + (grit - 0.5) * 0.025);
+
+      const hL = map[iy][Math.max(0, ix - 1)];
+      const hR = map[iy][Math.min(SEG, ix + 1)];
+      const hD = map[Math.max(0, iy - 1)][ix];
+      const hU = map[Math.min(SEG, iy + 1)][ix];
+      const slope = Math.sqrt((hR - hL) ** 2 + (hU - hD) ** 2) / (cell * 2);
+      const cliff = smooth01(slope, 0.55, 1.8);
+      if (cliff > 0.01) tmp.lerp(rockCool, cliff * 0.55);
+
       const pi = (iy * n + ix) * 4;
       const ta = featureTintData[pi + 3] / 255;
       if (ta > 0.001) {
@@ -2562,8 +2796,7 @@ function bakeTerrainVertexColors() {
         gnd.setRGB(groundData[pi] / 255, groundData[pi + 1] / 255, groundData[pi + 2] / 255);
         tmp.lerp(gnd, clamp01(ga));
       }
-      // Slight desaturation — ash / ink-wash under PBR lights (style-dependent)
-      const desat = terrainPalette.desat ?? 0.08;
+      const desat = terrainPalette.desat ?? 0.04;
       if (desat > 0.001) {
         const gray = tmp.r * 0.3 + tmp.g * 0.5 + tmp.b * 0.2;
         tmp.r += (gray - tmp.r) * desat;
@@ -2571,9 +2804,22 @@ function bakeTerrainVertexColors() {
         tmp.b += (gray - tmp.b) * desat;
       }
       col.setXYZ(i, tmp.r, tmp.g, tmp.b);
+
+      let rough = 0.9;
+      if (h < 0.35) rough = 0.72 + wetAmt * 0.08;
+      else if (cliff > 0.25) rough = 0.68 + (1 - cliff) * 0.12;
+      else if (t > 0.55) rough = 0.88;
+      else rough = 0.92;
+      const rv = Math.round(clamp01(rough) * 255);
+      const ri = (iy * n + ix) * 4;
+      terrainRoughData[ri] = rv;
+      terrainRoughData[ri + 1] = rv;
+      terrainRoughData[ri + 2] = rv;
+      terrainRoughData[ri + 3] = 255;
     }
   }
   col.needsUpdate = true;
+  terrainRoughTex.needsUpdate = true;
 }
 
 function applyIslandColors() {
@@ -2651,7 +2897,12 @@ function rebuildCompositeHeightMap() {
   if (!(transformDragging && transform.object === featureProxy)) updateFeatureProxy();
   if (!(transformDragging && transform.object === layerProxy)) updateLayerProxy();
   rebuildGroundTexture();
-  if (typeof rebuildEditGrid === 'function') rebuildEditGrid();
+  // Defer dense edit-grid rebuild — sampleHeight×100k was freezing boot/clicks
+  if (typeof rebuildEditGrid === 'function') {
+    if (window.__bootPhase === 'ready' || window.__animStarted) {
+      requestAnimationFrame(() => rebuildEditGrid());
+    }
+  }
 }
 
 function applyHeightMapToGeometry() {
@@ -2670,6 +2921,7 @@ function applyHeightMapToGeometry() {
   terrainGeo.computeVertexNormals();
   terrainPalette.maxH = maxH * 1.05;
   bakeTerrainVertexColors();
+  syncHeightTexture();
 }
 
 /**
@@ -2917,7 +3169,7 @@ const _hbChildMat = new THREE.Matrix4();
 
 /**
  * Local-space collision: per-mesh parts for accurate stand-on height + side hits.
- * Tall props also get a thin Y-cylinder so foliage overhang doesn't form a fat wall.
+ * Trees: trunk mesh only (walk through canopy / branches).
  */
 function ensureLocalHitbox(entry) {
   if (!entry?.mesh || entry.type === 'water') return null;
@@ -2929,9 +3181,33 @@ function ensureLocalHitbox(entry) {
   mesh.updateMatrixWorld(true);
   _hbLocalBox.makeEmpty();
   const parts = [];
+  const trunkOnly = isTreeType(entry.type);
   mesh.traverse((c) => {
     if (!c.isMesh || !c.geometry) return;
     if (c.name === 'flame' || c.name === 'mobNameTag' || c.isSprite) return;
+    if (c.userData?.hitboxHelper) return;
+    // Skip currently-hidden meshes in hierarchy
+    let vis = c;
+    while (vis) {
+      if (vis.visible === false) return;
+      vis = vis.parent;
+    }
+    // Trees: play collision = authored trunk mesh only (not canopy / editor pick proxy)
+    if (trunkOnly) {
+      if (c.userData?.editorPick || c.name === 'TreeEditorPick' || c.name === 'TrunkPick') return;
+      if (c.userData?.realTreeMesh) {
+        if (!c.userData.isTrunk) return;
+      } else {
+        // Unknown tree mesh — skip wide/flat canopy-like pieces
+        if (!c.geometry.boundingBox) c.geometry.computeBoundingBox();
+        const bb = c.geometry.boundingBox;
+        const sx = bb.max.x - bb.min.x;
+        const sy = bb.max.y - bb.min.y;
+        const sz = bb.max.z - bb.min.z;
+        const xz = Math.max(sx, sz);
+        if (sy < xz * 1.2) return; // not tall enough → foliage
+      }
+    }
     if (!c.geometry.boundingBox) c.geometry.computeBoundingBox();
     _hbChildBox.copy(c.geometry.boundingBox);
     _hbChildMat.copy(mesh.matrixWorld).invert().multiply(c.matrixWorld);
@@ -2940,16 +3216,16 @@ function ensureLocalHitbox(entry) {
     const sx = _hbChildBox.max.x - _hbChildBox.min.x;
     const sy = _hbChildBox.max.y - _hbChildBox.min.y;
     const sz = _hbChildBox.max.z - _hbChildBox.min.z;
-    // Skip tiny decor (eyes, rings) — they inflate platforms / traps
     if (Math.max(sx, sy, sz) < 0.07) return;
     _hbLocalBox.union(_hbChildBox);
-    // Shrink toward center so the box sits inside the mesh more often
     const cx = (_hbChildBox.min.x + _hbChildBox.max.x) * 0.5;
     const cy = (_hbChildBox.min.y + _hbChildBox.max.y) * 0.5;
     const cz = (_hbChildBox.min.z + _hbChildBox.max.z) * 0.5;
-    const hx = Math.max(0.03, sx * 0.5 * (1 - HIT_XZ_SHRINK));
+    // Trunks: fit the authored trunk mesh closely (follow the modelled stem)
+    const xzShrink = trunkOnly ? 0.08 : HIT_XZ_SHRINK;
+    const hx = Math.max(0.03, sx * 0.5 * (1 - xzShrink));
     const hy = Math.max(0.03, sy * 0.5 * (1 - HIT_Y_SHRINK));
-    const hz = Math.max(0.03, sz * 0.5 * (1 - HIT_XZ_SHRINK));
+    const hz = Math.max(0.03, sz * 0.5 * (1 - xzShrink));
     parts.push({
       min: { x: cx - hx, y: cy - hy, z: cz - hz },
       max: { x: cx + hx, y: cy + hy, z: cz + hz },
@@ -2967,8 +3243,8 @@ function ensureLocalHitbox(entry) {
   const rz = Math.max(max.z - cz, cz - min.z);
   const hy = max.y - min.y;
   const cyl = hy >= 1.25 * Math.max(rx * 2, rz * 2, 0.05);
-  // Tall props: thin trunk-like radius (ignore wide canopy for walling)
-  const slim = cyl ? 0.42 : 0.92;
+  // Keep play cylinder close to trunk mesh width (was 0.55 — too fat / canopy-like)
+  const slim = trunkOnly ? 0.92 : (cyl ? 0.42 : 0.92);
   entry._localHitbox = {
     gen: mesh.id,
     min,
@@ -2977,10 +3253,60 @@ function ensureLocalHitbox(entry) {
     cz,
     rx: Math.max(rx * slim, 0.05),
     rz: Math.max(rz * slim, 0.05),
-    cyl,
+    cyl: trunkOnly ? true : cyl,
     parts,
   };
   return entry._localHitbox;
+}
+
+/** Debug: wireframe boxes for collision parts (local to each object). */
+let showHitboxes = false;
+const _hitboxHelperMat = new THREE.MeshBasicMaterial({
+  color: 0x33ff99, wireframe: true, depthTest: true, transparent: true, opacity: 0.85,
+});
+_hitboxHelperMat.userData.shared = true;
+_hitboxHelperMat.userData.noCastShadow = true;
+
+function clearHitboxHelpers(root) {
+  if (!root) return;
+  const doomed = [];
+  root.traverse((c) => {
+    if (c.userData?.hitboxHelper) doomed.push(c);
+  });
+  for (const c of doomed) {
+    c.parent?.remove(c);
+    if (c.geometry && !c.geometry.userData?.shared) c.geometry.dispose();
+  }
+}
+
+function refreshHitboxHelpers() {
+  state.objects.forEach((o) => {
+    if (!o.mesh) return;
+    clearHitboxHelpers(o.mesh);
+  });
+  if (!showHitboxes) return;
+  state.objects.forEach((o) => {
+    if (!o.mesh) return;
+    o._localHitbox = null;
+    const lb = ensureLocalHitbox(o);
+    if (!lb?.parts?.length) return;
+    for (const p of lb.parts) {
+      const w = Math.max(0.02, p.max.x - p.min.x);
+      const h = Math.max(0.02, p.max.y - p.min.y);
+      const d = Math.max(0.02, p.max.z - p.min.z);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), _hitboxHelperMat);
+      box.position.set(
+        (p.min.x + p.max.x) * 0.5,
+        (p.min.y + p.max.y) * 0.5,
+        (p.min.z + p.max.z) * 0.5,
+      );
+      box.userData.hitboxHelper = true;
+      box.userData.noCastShadow = true;
+      box.castShadow = false;
+      box.receiveShadow = false;
+      o.mesh.add(box);
+    }
+  });
 }
 
 function worldToObjectLocal(mesh, x, y, z, out) {
@@ -3166,9 +3492,11 @@ function rebuildTerrainFromIsland() {
   rebuildCompositeHeightMap();
 }
 
+// Lightweight height init only — full rebuild (normals / tint / edit-grid) runs in bootEditor.
+// A sync rebuildCompositeHeightMap() here was freezing the main thread before the UI mounted.
 generateBaseHeightMap();
-rebuildCompositeHeightMap();
-applyIslandColors();
+state.heightMap = state.baseMap.map((row) => row.slice());
+window.__modStep = 'height-init-ok';
 
 // ═══════════════════════════════════════════════════════════
 // Water ponds (澤 dig + 穴注水 visuals — same mesh logic as 澤)
@@ -3820,9 +4148,11 @@ function cprop(props, key, fallback) {
 
 /** Trees & flowers — separate hotbar tabs, low-poly makers */
 const PLANTS = installPlants(THREE, { mat, cprop, hash2 });
+window.__modStep = 'plants-ok';
 PRESETS.push(...PLANTS.TREE_PRESETS, ...PLANTS.FLOWER_PRESETS);
 Object.assign(DEFAULT_PROPS, PLANTS.DEFAULTS);
 const isTreeType = PLANTS.isTreeType;
+const isRealTreeType = PLANTS.isRealTreeType;
 const isFlowerType = PLANTS.isFlowerType;
 const updatePlantAnims = PLANTS.updatePlantAnims;
 
@@ -3834,6 +4164,7 @@ const isStructureType = STRUCTURES.isStructureType;
 
 /** Beasts / birds / aqua / crawlies */
 const ANIMALS = installAnimals(THREE, { mat, cprop, hash2 });
+window.__modStep = 'animals-ok';
 PRESETS.push(...ANIMALS.PRESETS);
 Object.assign(DEFAULT_PROPS, ANIMALS.DEFAULTS);
 isMob = ANIMALS.isMob;
@@ -4898,6 +5229,7 @@ function createObject(type, props, position, opts = {}) {
   refreshOutliner();
   if (isMob(type)) syncMobNameTag(entry);
   if (type === 'water') fixWaterBankScale(mesh);
+  if (showHitboxes) refreshHitboxHelpers();
   return entry;
 }
 
@@ -4953,6 +5285,7 @@ function rebuildObjectMesh(entry) {
   else snapObjectToTerrain(mesh); // XZ grid only — preserve free Y
   if (was) selectObject(mesh);
   if (isMob(entry.type)) syncMobNameTag(entry);
+  if (showHitboxes) refreshHitboxHelpers();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -5688,8 +6021,8 @@ function renderPlaceToolProps(type) {
   if (plant) {
     if (def.clusterCount == null) def.clusterCount = 1;
     if (def.clusterRadius == null) def.clusterRadius = isFlowerType(type) ? 1.2 : 2.5;
-    const maxC = isFlowerType(type) ? 24 : 16;
-    const maxR = isFlowerType(type) ? 12 : 16;
+    const maxC = isFlowerType(type) ? 24 : isRealTreeType(type) ? 3 : 16;
+    const maxR = isFlowerType(type) ? 12 : isRealTreeType(type) ? 6 : 16;
     el.innerHTML = `
       <div class="section"><h3>放置 · ${label}</h3>
         <p style="font-size:0.72rem;color:#8a8070;line-height:1.4;margin-bottom:8px">
@@ -5777,12 +6110,16 @@ function renderPropsObject(mesh) {
     addR('height', '高度', 0.5, 4, 0.05);
     if (p.clusterCount == null) p.clusterCount = 1;
     if (p.clusterRadius == null) p.clusterRadius = 2.5;
-    addR('clusterCount', '叢數', 1, 16, 1);
-    addR('clusterRadius', '半徑', 0, 16, 0.25);
-    addC('color', '葉色', p.color || '#3a4538');
-    addC('trunkColor', '幹／稈色', p.trunkColor || '#4a3a2e');
-    addC('color2', '花／果／點綴', p.color2 || '#c8b0b0');
-    if (p.fruitColor != null) addC('fruitColor', '果色', p.fruitColor);
+    addR('clusterCount', '叢數', 1, isRealTreeType(type) ? 3 : 16, 1);
+    addR('clusterRadius', '半徑', 0, isRealTreeType(type) ? 6 : 16, 0.25);
+    if (!isRealTreeType(type)) {
+      addC('color', '葉色', p.color || '#3a4538');
+      addC('trunkColor', '幹／稈色', p.trunkColor || '#4a3a2e');
+      addC('color2', '花／果／點綴', p.color2 || '#c8b0b0');
+      if (p.fruitColor != null) addC('fruitColor', '果色', p.fruitColor);
+    } else {
+      addNote('寫實林木 — 高度與叢植可調；外觀來自模型');
+    }
     addNote('叢數>1 時，這一物件在半徑內長出多株（仍算一個物件）');
   } else if (isFlowerType(type)) {
     if (p.clusterCount == null) p.clusterCount = 1;
@@ -6099,6 +6436,8 @@ function hitSelectable(e) {
   if (!meshes.length) return null;
   const hits = raycaster.intersectObjects(meshes, true);
   for (const h of hits) {
+    // Skip debug helpers / invisible-only pick junk with no parent selectable
+    if (h.object?.userData?.hitboxHelper) continue;
     let obj = h.object;
     while (obj && !obj.userData.selectable) obj = obj.parent;
     if (obj?.userData?.selectable) return obj;
@@ -6218,6 +6557,7 @@ function beginHotbarDrag(type, clientX, clientY) {
 /** Offscreen renderer for hotbar icons — actual 3D look of each preset */
 /** Offscreen renderer for hotbar icons — actual 3D look of each preset */
 const thumbRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+window.__modStep = 'thumb-renderer-ok';
 thumbRenderer.setSize(128, 128, false);
 thumbRenderer.setPixelRatio(1);
 thumbRenderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -6383,8 +6723,30 @@ function ensureThumb(type) {
   return thumbCache[type];
 }
 
+function invalidateRealTreeThumbs() {
+  for (const spec of REAL_TREE_SPECS) {
+    delete thumbCache[spec.type];
+  }
+}
+
+function refreshRealTreeThumbsAndHotbar() {
+  invalidateRealTreeThumbs();
+  if (state.hotbarTab === 'trees') rebuildHotbarSlots();
+}
+
+/** Rebuild every placed real tree after quality / GLB load changes. */
+function rebuildAllRealTrees() {
+  setRealTreeQuality(gfx.quality);
+  for (const o of state.objects) {
+    if (!isRealTreeType(o.type)) continue;
+    rebuildObjectMesh(o);
+  }
+  refreshHitboxHelpers();
+}
+
+window.__modStep = 'pre-hotbar';
 const hotbarTabsEl = document.getElementById('hotbar-tabs');
-HOTBAR_TABS.forEach((t) => {
+visibleHotbarTabs().forEach((t) => {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'tab' + (t.id === state.hotbarTab ? ' active' : '');
@@ -6483,8 +6845,8 @@ function renderPaintToolProps(kind) {
       ? '拖曳抬升 · Shift 下壓'
       : mode === 'hole' ? '拖曳下挖' : '拖曳下挖 · 自動注水';
     el.innerHTML = `
-      <div class="section"><h3>手動塑形 · ${modeLabel}</h3>
-        <p style="font-size:0.72rem;color:#8a8070;line-height:1.4;margin-bottom:8px">格點 0.25 · ${modeHint} · ⌘Z 復原每一步 · 按「完成」寫入清單</p>
+      <div class="section"><h3>塑形 · ${modeLabel}</h3>
+        <p style="font-size:0.72rem;color:#8a8070;line-height:1.4;margin-bottom:8px">格點 0.5 · ${modeHint} · ⌘Z 復原每一步 · 按「完成」寫入清單</p>
         <div class="ctrl"><label>大小 Size <span class="val" id="v-brushSize">${state.brush.size}</span></label>
           <input type="range" id="brushSize" min="0.2" max="10" step="0.1" value="${state.brush.size}"/></div>
         <div class="ctrl"><label>力度 Strength <span class="val" id="v-brushStr">${state.brush.strength}</span></label>
@@ -6808,7 +7170,11 @@ function endFreeBodyDrag(e) {
   transformDragging = !!transform.dragging;
 
   if (!fd.moved) {
-    // Click — normal buildSelectPointer / handleBuildSelectClick path selects the object
+    // Capture-phase pointerdown stopped propagation, so buildSelectPointer was
+    // never armed — select here (same hit as drag). Suppress the bubble click.
+    buildSelectSuppress = true;
+    buildSelectPointer = null;
+    selectObject(fd.mesh, { additive: wantsAdditive(e) });
     return;
   }
 
@@ -6919,28 +7285,95 @@ canvas.addEventListener('pointercancel', () => {
 
 function cloneMap(m) { return m.map((r) => r.slice()); }
 
+/** Lift placed objects when the heightmap under them changes (sculpt / mountain). */
+function liftObjectsWithTerrainDelta(getOldGround, getNewGround) {
+  state.objects.forEach((o) => {
+    if (!o?.mesh) return;
+    if (o.type === 'water' || o.mesh.userData.float) {
+      snapObjectToTerrain(o.mesh);
+      return;
+    }
+    const x = o.mesh.position.x;
+    const z = o.mesh.position.z;
+    const oldG = getOldGround(o, x, z);
+    const newG = getNewGround(o, x, z);
+    const dH = newG - oldG;
+    if (Math.abs(dH) < 1e-5) return;
+    o.mesh.position.y += dH;
+    if (isMob(o.type)) {
+      const m = o.mesh.userData.mob;
+      if (m) {
+        if (m.homeY != null) m.homeY += dH;
+        if (m.ty != null) m.ty += dH;
+      }
+      syncMobOriginToProps(o);
+    }
+    syncObjectTransformProps(o);
+  });
+}
+
+/** Live sculpt preview: patch heightmap + mesh verts only in the brush (no full rebuild). */
 function sculptAt(wx, wz, raise) {
   if (!state.sessionDelta) state.sessionDelta = emptyMap(0);
-  sessionSculptUndo.push(cloneMap(state.sessionDelta));
-  if (sessionSculptUndo.length > history.max) sessionSculptUndo.shift();
-  updateUndoButtons();
+  if (!state.heightMap) rebuildCompositeHeightMap();
+  // One undo snapshot per stroke (not per pointermove sample)
+  if (state.sculpting && !state._sculptStrokeUndoPushed) {
+    sessionSculptUndo.push(cloneMap(state.sessionDelta));
+    if (sessionSculptUndo.length > history.max) sessionSculptUndo.shift();
+    state._sculptStrokeUndoPushed = true;
+    updateUndoButtons();
+  }
+  // Snapshot ground under objects before this brush dab
+  const before = new Map();
+  state.objects.forEach((o) => {
+    if (!o?.mesh || o.type === 'water' || o.mesh.userData.float) return;
+    before.set(o.id, sampleHeight(o.mesh.position.x, o.mesh.position.z));
+  });
+
   const delta = state.sessionDelta;
+  const map = state.heightMap;
   const size = state.brush.size;
   const str = state.brush.strength * (raise ? 1 : -1);
   const { u, v } = worldToMapUV(wx, wz);
   const rad = (size / WORLD) * SEG;
   const r2 = rad * rad;
-  for (let iy = Math.max(0, Math.floor(v - rad)); iy <= Math.min(SEG, Math.ceil(v + rad)); iy++) {
-    for (let ix = Math.max(0, Math.floor(u - rad)); ix <= Math.min(SEG, Math.ceil(u + rad)); ix++) {
+  const pos = terrainGeo.attributes.position;
+  const iy0 = Math.max(0, Math.floor(v - rad));
+  const iy1 = Math.min(SEG, Math.ceil(v + rad));
+  const ix0 = Math.max(0, Math.floor(u - rad));
+  const ix1 = Math.min(SEG, Math.ceil(u + rad));
+  for (let iy = iy0; iy <= iy1; iy++) {
+    for (let ix = ix0; ix <= ix1; ix++) {
       const d2 = (ix - u) ** 2 + (iy - v) ** 2;
       if (d2 > r2) continue;
       const fall = Math.pow(1 - d2 / r2, 2);
-      delta[iy][ix] += str * fall;
+      const amt = str * fall;
+      delta[iy][ix] += amt;
+      map[iy][ix] += amt;
+      pos.setY(iy * (SEG + 1) + ix, map[iy][ix]);
     }
   }
-  // Mountain gradient colors come from height via rebuildFeatureTint (same as 山)
-  rebuildCompositeHeightMap();
+  pos.needsUpdate = true;
+  state._sculptNeedsFullBake = true;
+  // Trees / props ride the rising floor during live sculpt
+  liftObjectsWithTerrainDelta(
+    (o) => before.get(o.id) ?? sampleHeight(o.mesh.position.x, o.mesh.position.z),
+    (o, x, z) => sampleHeight(x, z),
+  );
   updateSculptPendingUI();
+}
+
+function finishSculptStroke() {
+  state._sculptStrokeUndoPushed = false;
+  if (!state._sculptNeedsFullBake) return;
+  state._sculptNeedsFullBake = false;
+  terrainGeo.computeVertexNormals();
+  bakeTerrainVertexColors();
+  syncHeightTexture();
+  rebuildFeatureTint();
+  if (typeof rebuildEditGrid === 'function') {
+    requestAnimationFrame(() => rebuildEditGrid());
+  }
 }
 
 function groundPaintAt(wx, wz) {
@@ -7223,7 +7656,7 @@ function endPaintStroke() {
   if (state.sculpting) {
     state.sculpting = false;
     orbit.enabled = true;
-    // Keep session until ✓ 完成 / 捨棄 / leave tool — do not auto-commit per stroke
+    finishSculptStroke();
     updateSculptPendingUI();
   }
   if (state.groundPainting) {
@@ -7285,6 +7718,18 @@ function setMode(mode) {
     state.showListPanel = false;
     document.getElementById('btn-list')?.classList.remove('on');
     document.getElementById('panel-left').classList.add('hidden');
+    // Arm 塑形 tab + brush
+    if (state.hotbarTab !== 'sculpt') setHotbarTab('sculpt');
+    const pr = PRESETS.find((p) => p.type === 'sculpt_mountain')
+      || PRESETS.find((p) => p.paint === 'sculpt');
+    if (pr) {
+      state.selectedPreset = pr.type;
+      state.sculptMode = pr.sculptMode || 'mountain';
+      state.brush.fillWater = state.sculptMode === 'water_hole';
+      document.querySelectorAll('.slot').forEach((s) => {
+        s.classList.toggle('selected', s.dataset.type === pr.type);
+      });
+    }
     renderPaintToolProps('sculpt');
     updateSculptPendingUI();
   } else if (mode === 'ground') {
@@ -7933,8 +8378,12 @@ document.getElementById('code-modal').addEventListener('click', (e) => {
 function meshAllowsShadow(c) {
   if (!c.isMesh) return false;
   if (c.isSprite) return false;
-  if (c.name === 'flame' || c.name === 'mobNameTag' || c.name === 'waterSurf' || c.name === 'leafCard') return false;
+  if (c.userData?.noCastShadow) return false;
+  if (c.userData?.hitboxHelper) return false;
+  if (c.name === 'TrunkPick' || c.name === 'flame' || c.name === 'mobNameTag' || c.name === 'waterSurf' || c.name === 'leafCard') return false;
+  if (c.name === 'treeProxyFar' || c.parent?.name === 'treeProxyFar') return false;
   const m = c.material;
+  if (m && m.visible === false) return false;
   if (m && m.transparent && (m.opacity ?? 1) < 0.4) return false;
   return true;
 }
@@ -7945,6 +8394,13 @@ function applyMeshShadows(root, on) {
     if (!c.isMesh) return;
     if (!meshAllowsShadow(c)) {
       c.castShadow = false;
+      c.receiveShadow = false;
+      return;
+    }
+    // Real trees: trunk casts in 真實 only; canopy never (shadow map thrash)
+    if (c.userData?.realTreeMesh) {
+      const trunkShadow = on && gfxIsUltra() && !!c.userData.isTrunk && c.name !== 'TrunkPick';
+      c.castShadow = trunkShadow;
       c.receiveShadow = false;
       return;
     }
@@ -7964,6 +8420,8 @@ function applyObjectMaterialStyle(opts = {}) {
       : (ultra ? 0.82 : 0.88);
   const tweak = (m) => {
     if (!m || m.roughness == null) return;
+    // Shared GLB tree mats — leave alone (flatShading rebuilds are costly)
+    if (m.userData?.realTreeMat || m.userData?.shared) return;
     m.flatShading = flat;
     m.roughness = rough;
     if (ultra && m.metalness != null) m.metalness = Math.min(0.08, (m.metalness || 0) + 0.02);
@@ -7983,19 +8441,19 @@ function applyObjectMaterialStyle(opts = {}) {
   walk(sculptWaterGroup);
 }
 
-/** Apply 極簡 / 正常 / 極致 shadows + 山水/自然 lighting & materials */
+/** Apply 基本 / 正常 / 真實 shadows + 山水/自然 lighting & materials */
 function applyGraphicsSettings(opts = {}) {
   const shadows = gfxShadowsOn();
   const ultra = gfxIsUltra();
   const rebuild = opts.rebuildTerrain !== false;
 
   renderer.shadowMap.enabled = shadows;
-  renderer.shadowMap.type = ultra ? THREE.PCFSoftShadowMap : THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   sun.castShadow = shadows;
-  // Peak: 4K shadow map; normal: 2K; simple: tiny unused map
+  // Small shadow maps — trees cast none; terrain/character only
   const mapSize = !shadows ? 512
-    : ultra ? (play.active ? 3072 : 4096)
-      : (play.active ? 1536 : 2048);
+    : ultra ? (play.active ? 1024 : 1536)
+      : (play.active ? 512 : 1024);
   if (sun.shadow.mapSize.x !== mapSize) {
     sun.shadow.mapSize.set(mapSize, mapSize);
     if (sun.shadow.map) {
@@ -8005,11 +8463,11 @@ function applyGraphicsSettings(opts = {}) {
   }
   sun.shadow.bias = ultra ? -0.00025 : -0.0004;
   sun.shadow.normalBias = ultra ? 0.028 : 0.04;
-  sun.shadow.radius = ultra ? 2.2 : 3.2;
-  const extent = ultra ? 72 : 58;
+  sun.shadow.radius = ultra ? 1.5 : 2.2;
+  const extent = ultra ? 56 : 48;
   Object.assign(sun.shadow.camera, {
     near: ultra ? 1.5 : 2,
-    far: ultra ? 180 : 150,
+    far: ultra ? 140 : 120,
     left: -extent, right: extent, top: extent, bottom: -extent,
   });
   sun.shadow.camera.updateProjectionMatrix();
@@ -8029,7 +8487,7 @@ function applyGraphicsSettings(opts = {}) {
 
   // Pixel density
   const prCap = play.active
-    ? (ultra ? 1.85 : gfx.quality === 'normal' ? 1.5 : 1.1)
+    ? (ultra ? 1.15 : gfx.quality === 'normal' ? 1 : 0.85)
     : gfxPixelRatioCap();
   renderer.setPixelRatio(Math.min(devicePixelRatio, prCap));
 
@@ -8071,10 +8529,14 @@ function applyGraphicsSettings(opts = {}) {
       skyMat.uniforms.botColor.value.setHex(0xb89868); // 赭石远山
     }
     renderer.toneMappingExposure = ultra ? 1.16 : 1.1;
-    terrainMat.roughness = ultra ? 0.84 : 0.88;
-    ocean.material.color.setHex(0x3a6a78); // deep 花青水
-    ocean.material.roughness = ultra ? 0.45 : 0.55;
-    terrainPalette.desat = 0; // keep mineral chroma
+    terrainMat.flatShading = false;
+    terrainMat.roughness = ultra ? 0.92 : 0.96;
+    terrainMat.normalScale.set(ultra ? 0.28 : 0.2, ultra ? 0.28 : 0.2);
+    oceanUniforms.uDeep.value.setHex(0x2a5a6a);
+    oceanUniforms.uShallow.value.setHex(0x5a8a80);
+    oceanUniforms.uFoam.value.setHex(0xd0e0d8);
+    oceanUniforms.uOpacity.value = ultra ? 0.78 : 0.7;
+    terrainPalette.desat = 0.02;
   } else if (style === 'shanshui') {
     hemiLight.color.setHex(0xd8d0bc);
     hemiLight.groundColor.setHex(0x3e443c);
@@ -8094,10 +8556,14 @@ function applyGraphicsSettings(opts = {}) {
       skyMat.uniforms.botColor.value.setHex(0x888880);
     }
     renderer.toneMappingExposure = ultra ? 1.08 : 1.02;
-    terrainMat.roughness = ultra ? 0.9 : 0.93;
-    ocean.material.color.setHex(0x5a7a72);
-    ocean.material.roughness = ultra ? 0.52 : 0.62;
-    terrainPalette.desat = ultra ? 0.05 : 0.08;
+    terrainMat.flatShading = false;
+    terrainMat.roughness = ultra ? 0.94 : 0.98;
+    terrainMat.normalScale.set(ultra ? 0.2 : 0.14, ultra ? 0.2 : 0.14);
+    oceanUniforms.uDeep.value.setHex(0x3a5a58);
+    oceanUniforms.uShallow.value.setHex(0x6a8a80);
+    oceanUniforms.uFoam.value.setHex(0xc8d8d0);
+    oceanUniforms.uOpacity.value = ultra ? 0.7 : 0.62;
+    terrainPalette.desat = ultra ? 0.04 : 0.06;
   } else {
     hemiLight.color.setHex(0xc5dff5);
     hemiLight.groundColor.setHex(0x4a6040);
@@ -8117,9 +8583,13 @@ function applyGraphicsSettings(opts = {}) {
       skyMat.uniforms.botColor.value.setHex(0xa8b090);
     }
     renderer.toneMappingExposure = ultra ? 1.26 : 1.18;
-    terrainMat.roughness = ultra ? 0.72 : 0.78;
-    ocean.material.color.setHex(0x3a8a82);
-    ocean.material.roughness = ultra ? 0.34 : 0.42;
+    terrainMat.flatShading = false;
+    terrainMat.roughness = ultra ? 0.88 : 0.92;
+    terrainMat.normalScale.set(ultra ? 0.32 : 0.24, ultra ? 0.32 : 0.24);
+    oceanUniforms.uDeep.value.setHex(0x1a6a78);
+    oceanUniforms.uShallow.value.setHex(0x4aaa98);
+    oceanUniforms.uFoam.value.setHex(0xe8f4f0);
+    oceanUniforms.uOpacity.value = ultra ? 0.75 : 0.68;
     terrainPalette.desat = 0;
   }
 
@@ -8141,6 +8611,8 @@ function syncGfxModalUI() {
   document.querySelectorAll('#gfx-style-seg .hud-btn').forEach((b) => {
     b.classList.toggle('on', b.dataset.style === gfx.style);
   });
+  const hb = document.getElementById('gfx-show-hitbox');
+  if (hb) hb.checked = !!showHitboxes;
 }
 
 function openGfxModal() {
@@ -8163,13 +8635,16 @@ document.getElementById('gfx-quality-seg')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-quality]');
   if (!btn) return;
   gfx.quality = btn.dataset.quality;
-  if (!GFX_QUALITY.has(gfx.quality)) gfx.quality = 'normal';
+  if (!GFX_QUALITY.has(gfx.quality)) gfx.quality = 'ultra';
   saveGfxSettings();
+  setRealTreeQuality(gfx.quality);
   applyGraphicsSettings({ rebuildTerrain: false });
+  rebuildAllRealTrees();
+  refreshRealTreeThumbsAndHotbar();
   const qToast = {
-    simple: '極簡渲染 · 陰影與動畫關閉',
-    normal: '正常渲染 · 柔和陰影',
-    ultra: '極致渲染 · 最高畫質',
+    simple: '基本 · 簡化樹形（無網格）',
+    normal: '正常 · 簡化樹形（無網格）',
+    ultra: '真實 · 寫實林木＋風動',
   };
   toast(qToast[gfx.quality] || gfxQualityLabel());
 });
@@ -8181,6 +8656,11 @@ document.getElementById('gfx-style-seg')?.addEventListener('click', (e) => {
   applyGraphicsSettings({ rebuildTerrain: true });
   const styleToast = { shanshui: '山水淡墨', hanmo: '翰墨丹青', natural: '自然寫實' };
   toast(styleToast[gfx.style] || '畫風已切換');
+});
+document.getElementById('gfx-show-hitbox')?.addEventListener('change', (e) => {
+  showHitboxes = !!e.target.checked;
+  refreshHitboxHelpers();
+  toast(showHitboxes ? '已顯示碰撞體' : '已隱藏碰撞體');
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -8236,204 +8716,13 @@ function lerpAngleToward(cur, target, t) {
   return cur + (target - cur) * t;
 }
 
-/** Stylized archaic wanderer — robe, topknot, two-bone limbs for walk cycle */
+/** Ornate crimson/gold archer — pure Three.js primitives (see archer-character.js) */
 function createPlayCharacter() {
-  const root = new THREE.Group();
-  root.name = 'playCharacter';
-  root.scale.setScalar(PLAY_CHAR_SCALE);
-  const skin = 0xc4a882;
-  const robe = 0x6a5a48;
-  const robeDark = 0x4a3e34;
-  const hair = 0x2a2420;
-  const sash = 0x8a6060;
-  const cloth = 0xb8a888;
-
-  const hips = new THREE.Group();
-  // Feet sit at y≈0; hips ≈ thigh+calf+foot height
-  hips.position.y = 0.78;
-  root.add(hips);
-
-  // Torso / wrapped robe (faces +Z — rotated to match walk yaw)
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.55, 8), matPlay(robe));
-  torso.position.y = 0.28;
-  torso.castShadow = true;
-  hips.add(torso);
-  const chestFold = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.08), matPlay(robeDark));
-  chestFold.position.set(0, 0.32, 0.14);
-  hips.add(chestFold);
-  const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.42, 8), matPlay(robeDark));
-  skirt.position.y = -0.12;
-  hips.add(skirt);
-  const sashM = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.035, 5, 12), matPlay(sash));
-  sashM.rotation.x = Math.PI / 2;
-  sashM.position.y = 0.05;
-  hips.add(sashM);
-  const sashTail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.36, 0.03), matPlay(sash));
-  sashTail.position.set(0.02, -0.14, 0.22);
-  hips.add(sashTail);
-
-  // Head + detailed archaic face
-  const headGroup = new THREE.Group();
-  headGroup.position.y = 0.78;
-  hips.add(headGroup);
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.1, 6), matPlay(skin));
-  neck.position.y = -0.18;
-  headGroup.add(neck);
-
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.155, 12, 10), matPlay(skin));
-  skull.scale.set(1.02, 1.08, 0.98);
-  headGroup.add(skull);
-
-  // Jaw / chin
-  const jaw = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), matPlay(skin));
-  jaw.position.set(0, -0.08, 0.04);
-  jaw.scale.set(0.95, 0.7, 0.85);
-  headGroup.add(jaw);
-
-  // Ears
-  for (const side of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), matPlay(skin));
-    ear.position.set(side * 0.15, 0.0, -0.02);
-    ear.scale.set(0.45, 1.1, 0.7);
-    headGroup.add(ear);
-  }
-
-  // Brow ridge
-  const brow = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.035, 0.06), matPlay(skin));
-  brow.position.set(0, 0.06, 0.12);
-  brow.rotation.x = -0.15;
-  headGroup.add(brow);
-
-  function makeEye(side) {
-    const g = new THREE.Group();
-    g.position.set(side * 0.055, 0.02, 0.13);
-    const white = new THREE.Mesh(new THREE.SphereGeometry(0.032, 8, 6), matPlay(0xf2ebe0));
-    white.scale.set(1, 0.85, 0.7);
-    g.add(white);
-    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), matPlay(0x3a4a42));
-    iris.position.z = 0.018;
-    g.add(iris);
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 5), matPlay(0x12100e));
-    pupil.position.z = 0.028;
-    g.add(pupil);
-    // upper lid shadow
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.012, 0.02), matPlay(skin));
-    lid.position.set(0, 0.022, 0.02);
-    g.add(lid);
-    headGroup.add(g);
-    return g;
-  }
-  const eyeL = makeEye(-1);
-  const eyeR = makeEye(1);
-
-  // Nose
-  const noseBridge = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.07, 0.04), matPlay(skin));
-  noseBridge.position.set(0, -0.01, 0.145);
-  headGroup.add(noseBridge);
-  const noseTip = new THREE.Mesh(new THREE.SphereGeometry(0.028, 7, 6), matPlay(0xb8926e));
-  noseTip.position.set(0, -0.04, 0.165);
-  noseTip.scale.set(1, 0.85, 1.1);
-  headGroup.add(noseTip);
-
-  // Mouth
-  const lipUpper = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.02), matPlay(0xa07068));
-  lipUpper.position.set(0, -0.09, 0.145);
-  headGroup.add(lipUpper);
-  const lipLower = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.014, 0.022), matPlay(0x8a6058));
-  lipLower.position.set(0, -0.105, 0.142);
-  headGroup.add(lipLower);
-
-  // Cheek tint
-  for (const side of [-1, 1]) {
-    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 5), matPlay(0xc49882, { transparent: true, opacity: 0.55 }));
-    cheek.position.set(side * 0.1, -0.04, 0.1);
-    cheek.scale.set(0.7, 0.55, 0.4);
-    headGroup.add(cheek);
-  }
-
-  // Hair + topknot (archaic 髻)
-  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.162, 10, 8), matPlay(hair));
-  hairCap.position.y = 0.04;
-  hairCap.scale.set(1.05, 0.72, 1.05);
-  headGroup.add(hairCap);
-  const sideHairL = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 5), matPlay(hair));
-  sideHairL.position.set(-0.12, -0.02, -0.02);
-  sideHairL.scale.set(0.7, 1.2, 0.8);
-  headGroup.add(sideHairL);
-  const sideHairR = sideHairL.clone();
-  sideHairR.position.x = 0.12;
-  headGroup.add(sideHairR);
-  const topknot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), matPlay(hair));
-  topknot.position.set(0, 0.2, -0.02);
-  headGroup.add(topknot);
-  const knotBand = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.015, 4, 10), matPlay(cloth));
-  knotBand.position.copy(topknot.position);
-  knotBand.rotation.x = Math.PI / 2;
-  headGroup.add(knotBand);
-
-  function makeArm(side) {
-    const shoulder = new THREE.Group();
-    shoulder.position.set(side * 0.28, 0.48, 0);
-    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.32, 6), matPlay(skin));
-    upper.geometry.translate(0, -0.16, 0);
-    shoulder.add(upper);
-    const elbow = new THREE.Group();
-    elbow.position.y = -0.32;
-    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.28, 6), matPlay(skin));
-    forearm.geometry.translate(0, -0.14, 0);
-    elbow.add(forearm);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 5), matPlay(skin));
-    hand.position.y = -0.3;
-    elbow.add(hand);
-    // short sleeve cuff
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.08, 6), matPlay(robe));
-    cuff.position.y = -0.02;
-    shoulder.add(cuff);
-    shoulder.add(elbow);
-    hips.add(shoulder);
-    return { shoulder, elbow, upper, forearm };
-  }
-
-  function makeLeg(side) {
-    const hip = new THREE.Group();
-    hip.position.set(side * 0.1, 0, 0);
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.38, 6), matPlay(robeDark));
-    thigh.geometry.translate(0, -0.19, 0);
-    hip.add(thigh);
-    const knee = new THREE.Group();
-    knee.position.y = -0.38;
-    const calf = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.36, 6), matPlay(skin));
-    calf.geometry.translate(0, -0.18, 0);
-    knee.add(calf);
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.18), matPlay(0x3a322c));
-    foot.position.set(0, -0.38, 0.04);
-    knee.add(foot);
-    // ankle wrap
-    const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.06, 6), matPlay(cloth));
-    wrap.position.y = -0.32;
-    knee.add(wrap);
-    hip.add(knee);
-    hips.add(hip);
-    return { hip, knee, thigh, calf };
-  }
-
-  const leftArm = makeArm(-1);
-  const rightArm = makeArm(1);
-  const leftLeg = makeLeg(-1);
-  const rightLeg = makeLeg(1);
-
-  // Rest pose — slight arm hang
-  leftArm.shoulder.rotation.z = 0.12;
-  rightArm.shoulder.rotation.z = -0.12;
-
-  root.visible = false;
-  scene.add(root);
-  return {
-    root, hips, head: headGroup,
-    leftArm, rightArm, leftLeg, rightLeg,
-    eyeL, eyeR, lipLower,
-  };
+  const parts = createArcherCharacter(THREE, matPlay);
+  parts.root.scale.setScalar(PLAY_CHAR_SCALE);
+  parts.root.visible = false;
+  scene.add(parts.root);
+  return parts;
 }
 
 play.parts = createPlayCharacter();
@@ -8507,7 +8796,8 @@ function animatePlayCharacter(dt) {
   let hipsY = 0.78, hipsX = 0, hipsZ = 0;
   let lHipX = 0, rHipX = 0, lKneeX = 0, rKneeX = 0;
   let lArmX = 0, rArmX = 0, lElbowX = -0.15, rElbowX = -0.15;
-  let lArmZ = 0.12, rArmZ = -0.12;
+  // Arm Z: −X arm needs −Z (out), +X arm needs +Z (out). Old signs tucked hands inward.
+  let lArmZ = -0.22, rArmZ = 0.22;
   let headX = 0, headY = 0, headZ = 0;
 
   if (play.sitting) {
@@ -8517,7 +8807,7 @@ function animatePlayCharacter(dt) {
     lKneeX = 1.45; rKneeX = 1.45;
     lArmX = -0.55; rArmX = -0.55;
     lElbowX = -0.85; rElbowX = -0.85;
-    lArmZ = 0.35; rArmZ = -0.35;
+    lArmZ = -0.35; rArmZ = 0.35;
     play.idlePhase += dt * 1.2;
     headY = Math.sin(play.idlePhase * 0.7) * 0.04;
   } else if (swimming) {
@@ -8540,8 +8830,8 @@ function animatePlayCharacter(dt) {
     rArmX = -0.35 + stroke * 0.55;
     lElbowX = -0.95 - Math.max(0, stroke) * 0.25;
     rElbowX = -0.95 - Math.max(0, -stroke) * 0.25;
-    lArmZ = 0.55 + Math.max(0, stroke) * 0.45;
-    rArmZ = -0.55 - Math.max(0, -stroke) * 0.45;
+    lArmZ = -0.55 - Math.max(0, stroke) * 0.45;
+    rArmZ = 0.55 + Math.max(0, -stroke) * 0.45;
     headX = 0.2;
     headY = stroke * 0.06;
   } else if (ascending) {
@@ -8551,7 +8841,7 @@ function animatePlayCharacter(dt) {
     lKneeX = 0.55; rKneeX = 0.7;
     lArmX = -1.25; rArmX = -1.1;
     lElbowX = -0.35; rElbowX = -0.4;
-    lArmZ = 0.35; rArmZ = -0.35;
+    lArmZ = -0.35; rArmZ = 0.35;
     headX = -0.08;
   } else if (descending) {
     hipsY = 0.78;
@@ -8560,7 +8850,7 @@ function animatePlayCharacter(dt) {
     lKneeX = 1.15; rKneeX = 1.05;
     lArmX = -0.75; rArmX = -0.85;
     lElbowX = -0.55; rElbowX = -0.5;
-    lArmZ = 0.7; rArmZ = -0.7;
+    lArmZ = -0.7; rArmZ = 0.7;
     headX = 0.1;
   } else if (landing) {
     const crouch = Math.min(1, play.landTimer / 0.12);
@@ -8586,7 +8876,7 @@ function animatePlayCharacter(dt) {
     lKneeX = 0.45 + reachL * 1.1; rKneeX = 0.45 + reachR * 1.1;
     lArmX = -0.85 - reachL * 0.75; rArmX = -0.85 - reachR * 0.75;
     lElbowX = -1.05 - reachL * 0.2; rElbowX = -1.05 - reachR * 0.2;
-    lArmZ = 0.08; rArmZ = -0.08;
+    lArmZ = -0.12; rArmZ = 0.12;
     headX = 0.18;
     headY = (reachL - reachR) * 0.03;
   } else if (moving) {
@@ -8605,6 +8895,7 @@ function animatePlayCharacter(dt) {
     lArmX = swing2 * 0.65; rArmX = swing * 0.65;
     lElbowX = -0.15 - Math.max(0, swing2) * 0.35;
     rElbowX = -0.15 - Math.max(0, swing) * 0.35;
+    lArmZ = -0.22; rArmZ = 0.22;
     headY = swing * 0.05;
   } else if (idle) {
     play.idlePhase += dt;
@@ -8622,8 +8913,8 @@ function animatePlayCharacter(dt) {
     rArmX = -0.08 + sway * 0.07;
     lElbowX = -0.2 + breath * 0.06;
     rElbowX = -0.18 + breath * 0.05;
-    lArmZ = 0.14 + sway * 0.04;
-    rArmZ = -0.14 - sway2 * 0.04;
+    lArmZ = -0.26 - sway * 0.04;
+    rArmZ = 0.26 + sway2 * 0.04;
     headX = breath * 0.03;
     headY = sway * 0.06;
     headZ = sway2 * 0.025;
@@ -9206,12 +9497,17 @@ let fpsFrames = 0;
 let fpsAccum = 0;
 let fpsDisplay = 0;
 
-/** Hide far props in play mode to cut draw calls when dens around stones/trees */
+/** Hide far non-tree props in play mode. Trees stay fully visible at all distances. */
 function updatePlayPropCull() {
   const px = play.pos.x, pz = play.pos.z;
   const near2 = 28 * 28;
   const far2 = 40 * 40;
   state.objects.forEach((o) => {
+    // Real trees: never distance-hide — must show full mesh everywhere
+    if (isRealTreeType(o.type)) {
+      o.mesh.visible = true;
+      return;
+    }
     const dx = o.mesh.position.x - px;
     const dz = o.mesh.position.z - pz;
     const d2 = dx * dx + dz * dz;
@@ -9247,6 +9543,32 @@ function updateFpsHud(dt) {
     const b = document.getElementById('v-play-fps-hud');
     if (a) a.textContent = t;
     if (b) b.textContent = t;
+    updateAdaptivePerf();
+  }
+}
+
+/** Drop pixel ratio when FPS is low — trees stay fully drawn, just fewer pixels */
+let _adaptCool = 0;
+function updateAdaptivePerf() {
+  if (_adaptCool > 0) { _adaptCool -= 0.4; return; }
+  if (fpsDisplay <= 0) return;
+  const cur = renderer.getPixelRatio();
+  const floor = 0.7;
+  if (fpsDisplay < 28 && cur > floor) {
+    const next = Math.max(floor, Math.round(cur * 0.82 * 100) / 100);
+    if (next < cur - 0.02) {
+      renderer.setPixelRatio(next);
+      _adaptCool = 2;
+    }
+  } else if (fpsDisplay > 50) {
+    const cap = play.active
+      ? (gfxIsUltra() ? 1.15 : gfx.quality === 'normal' ? 1 : 0.85)
+      : gfxPixelRatioCap();
+    const want = Math.min(devicePixelRatio, cap);
+    if (cur < want - 0.05) {
+      renderer.setPixelRatio(Math.min(want, cur + 0.08));
+      _adaptCool = 2.5;
+    }
   }
 }
 
@@ -9263,7 +9585,8 @@ function hideBootScreen() {
   const el = document.getElementById('boot-screen');
   if (!el) return;
   el.classList.add('hide');
-  setTimeout(() => el.remove(), 500);
+  el.style.pointerEvents = 'none';
+  setTimeout(() => { try { el.remove(); } catch (_) { /* ignore */ } }, 500);
 }
 
 let _plantAnimTick = 0;
@@ -9317,8 +9640,10 @@ function animate() {
   const anims = gfxAnimsOn();
   if (anims) {
     waveT += dt;
+    oceanUniforms.uTime.value = waveT;
     ocean.position.y = SEA_LEVEL + Math.sin(waveT * 1.4) * 0.04;
   } else {
+    oceanUniforms.uTime.value = 0;
     ocean.position.y = SEA_LEVEL;
   }
   _plantAnimTick++;
@@ -9354,6 +9679,7 @@ function animate() {
     if (transform.object && transform.getHelper().visible) transform.update();
     orbit.update();
     syncEditGridLod();
+    updateFpsHud(dt);
     renderer.render(scene, camera);
   } else {
     updatePlay(dt);
@@ -9390,38 +9716,131 @@ function warmThumbsForTab(tabId) {
 }
 
 async function bootEditor() {
-  setBootProgress(8, '準備場景…');
-  await new Promise((r) => requestAnimationFrame(r));
-  setBootProgress(25, '升起島嶼…');
-  createFeature('island', { texture: 'default' }, 0, 0);
-  createObject('松', {}, new THREE.Vector3(2, 0, 1.5));
-  createObject('竹', {}, new THREE.Vector3(3.2, 0, 0.4));
-  createObject('菊', {}, new THREE.Vector3(1.2, 0, 2.0));
-  createObject('rock', { roughness: 0.7 }, new THREE.Vector3(-1.8, 0, 1.2));
-  createObject('shrine', { style: 'cairn' }, new THREE.Vector3(0, 0, -1.2));
-  createObject('firepit', {}, new THREE.Vector3(0.9, 0, 0.2));
-  history.undo.length = 0;
-  updateUndoButtons();
-  setBootProgress(45, '畫面設定…');
-  applyGraphicsSettings({ rebuildTerrain: true });
-  setBootProgress(55, '繪製圖示…');
-  await warmThumbsForTab(state.hotbarTab);
-  rebuildHotbarSlots();
-  setBootProgress(96, '就緒');
-  await new Promise((r) => requestAnimationFrame(r));
-  hideBootScreen();
-  animate();
-  toast('地形欄可加島 · 選島調材質與顏色');
-  // Warm remaining hotbar thumbs in the background (avoids first-tab hitch later)
+  const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
+  // Hard failsafe — never leave the opaque boot overlay eating clicks
+  const bootFailsafe = setTimeout(() => {
+    try { hideBootScreen(); if (!window.__animStarted) { window.__animStarted = true; animate(); } } catch (_) { /* ignore */ }
+  }, 2500);
+
+  try {
+    setBootProgress(8, '準備場景…');
+    await yieldFrame();
+
+    // Dismiss boot BEFORE heavy terrain work — overlay was blocking all clicks
+    setBootProgress(100, '就緒');
+    hideBootScreen();
+    clearTimeout(bootFailsafe);
+    if (!window.__animStarted) { window.__animStarted = true; animate(); }
+    window.__bootPhase = 'ui-live';
+    await yieldFrame();
+
+    window.__bootPhase = 'create-island';
+    createFeature('island', { texture: 'default' }, 0, 0);
+    // Island must stay unlocked so terrain clicks / gizmos work
+    const bootIsland = state.features.find((f) => f.type === 'island');
+    if (bootIsland) bootIsland.locked = false;
+    showHitboxes = false;
+    const hbEl = document.getElementById('gfx-show-hitbox');
+    if (hbEl) hbEl.checked = false;
+    window.__bootPhase = 'island-done';
+    history.undo.length = 0;
+    updateUndoButtons();
+    await yieldFrame();
+
+    window.__bootPhase = 'gfx';
+    applyGraphicsSettings({ rebuildTerrain: true });
+    await yieldFrame();
+
+    window.__bootPhase = 'demo-trees';
+    const DEMO_TREES = [
+      { type: 'real_song', x: 2.2, z: 1.4 },
+      { type: 'real_liu', x: -2.4, z: 1.6 },
+      { type: 'real_sang', x: 1.6, z: -2.2 },
+      { type: 'real_bai', x: -1.8, z: -1.5 },
+    ];
+    for (const spec of DEMO_TREES) {
+      try {
+        if (!state.objects.some((o) => o.type === spec.type)) {
+          createObject(spec.type, {}, new THREE.Vector3(spec.x, 0, spec.z));
+        }
+      } catch (err) {
+        console.warn('demo tree', spec.type, err);
+      }
+    }
+    rebuildHotbarSlots();
+    toast('塑形島嶼 · 樹木欄可放松柳桑柏');
+    warmThumbsForTab(state.hotbarTab).catch(() => {});
+    window.__bootPhase = 'ready';
+    window.__dbg = () => ({
+      phase: window.__bootPhase,
+      features: state.features.length,
+      objects: state.objects.map((o) => o.type),
+      mode: state.mode,
+      quality: gfx.quality,
+      trees: state.objects.filter((o) => isRealTreeType(o.type)).map((o) => {
+        let meshes = 0, tris = 0, matTypes = new Set();
+        o.mesh?.traverse((c) => {
+          if (!c.isMesh) return;
+          meshes++;
+          tris += (c.geometry?.index ? c.geometry.index.count / 3 : (c.geometry?.attributes?.position?.count || 0) / 3) | 0;
+          const m = c.material;
+          (Array.isArray(m) ? m : [m]).forEach((mat) => { if (mat?.type) matTypes.add(mat.type); });
+        });
+        const box = new THREE.Box3().setFromObject(o.mesh);
+        const size = box.getSize(new THREE.Vector3());
+        return { type: o.type, meshes, tris, size: [size.x, size.y, size.z].map((n) => +n.toFixed(2)), mats: [...matTypes] };
+      }),
+    });
+
+    // Load GLBs in background (same module instance as plant factories)
+    (async () => {
+      try {
+        await preloadRealTrees(THREE, GLTFLoader, {
+          bootOnly: true,
+          onProgress: (pct, label) => console.info(label, pct),
+        });
+        rebuildAllRealTrees();
+        refreshRealTreeThumbsAndHotbar();
+      } catch (err) {
+        console.error('real tree preload failed', err);
+      }
+      try {
+        await preloadRemainingRealTrees(THREE, GLTFLoader, (label) => console.info(label));
+        rebuildAllRealTrees();
+        refreshRealTreeThumbsAndHotbar();
+        if (realTreesReady()) toast('松、柳、桑、柏已就緒');
+      } catch (err) {
+        console.warn('background tree load', err);
+      }
+    })();
+  } catch (err) {
+    console.error('bootEditor failed', err);
+    window.__bootErr = String(err?.stack || err);
+    clearTimeout(bootFailsafe);
+    hideBootScreen();
+    if (!window.__animStarted) { window.__animStarted = true; animate(); }
+    toast('載入失敗，請重新整理頁面');
+  }
+  // Warm visible hotbar thumbs in the background (release: 塑 + 樹木 only)
   (async () => {
-    for (const tab of HOTBAR_TABS) {
+    await new Promise((r) => requestAnimationFrame(r));
+    for (const tab of visibleHotbarTabs()) {
       if (tab.id === state.hotbarTab) continue;
+      if (tab.id === 'trees') {
+        let waited = 0;
+        while (!realTreesReady() && waited < 180_000) {
+          await new Promise((r) => setTimeout(r, 400));
+          waited += 400;
+        }
+        invalidateRealTreeThumbs();
+      }
       const list = presetsForTab(tab.id);
       for (const pr of list) {
         if (thumbCache[pr.type]) continue;
         ensureThumb(pr.type);
         await new Promise((r) => requestAnimationFrame(r));
       }
+      if (tab.id === 'trees' && state.hotbarTab === 'trees') rebuildHotbarSlots();
     }
   })();
 }

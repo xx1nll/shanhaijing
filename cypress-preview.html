@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cypress tree preview</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #d8d0c4; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hud {
+      position: fixed; left: 12px; bottom: 12px; color: #3a3028;
+      font: 13px/1.4 "Iowan Old Style", "Palatino Linotype", Palatino, serif; opacity: 0.9;
+      pointer-events: none;
+    }
+    #err {
+      position: fixed; left: 12px; top: 12px; color: #8b1a1a;
+      font: 13px/1.4 system-ui, sans-serif; max-width: 480px;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">拖曳旋轉 · 滾輪縮放 · 1正面 2侧面 3背面 · cypress-tree.glb</div>
+  <div id="err"></div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    const errEl = document.getElementById('err');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xd8d0c4);
+    scene.fog = new THREE.Fog(0xd8d0c4, 16, 38);
+
+    const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 80);
+    camera.position.set(8, 6, 11);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xf2ebe0, 0x5a6a48, 0.95));
+    const sun = new THREE.DirectionalLight(0xfff0d8, 1.35);
+    sun.position.set(6, 12, 5);
+    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xc8bca8, 0.35));
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 4.0, 0);
+    controls.enableDamping = true;
+    controls.minDistance = 4;
+    controls.maxDistance = 26;
+    controls.update();
+
+    const views = {
+      1: { pos: [8, 6, 11], target: [0, 4.0, 0] },
+      2: { pos: [14, 5, 0], target: [0, 4.0, 0] },
+      3: { pos: [0, 5.5, -14], target: [0, 4.0, 0] },
+    };
+
+    window.addEventListener('keydown', (e) => {
+      const v = views[e.key];
+      if (!v) return;
+      camera.position.set(...v.pos);
+      controls.target.set(...v.target);
+      controls.update();
+    });
+
+    const loader = new GLTFLoader();
+    loader.load(
+      './models/cypress-tree.glb',
+      (gltf) => {
+        const root = gltf.scene;
+        root.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+            if (o.material) o.material.side = THREE.DoubleSide;
+          }
+        });
+        scene.add(root);
+        window.__cypress = root;
+      },
+      undefined,
+      (err) => {
+        errEl.textContent = 'Failed to load models/cypress-tree.glb — serve this folder over HTTP.';
+        console.error(err);
+      },
+    );
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    (function tick() {
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    })();
+  </script>
+</body>
+</html>
